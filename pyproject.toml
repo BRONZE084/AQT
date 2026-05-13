@@ -1,0 +1,10 @@
+[project]
+name = "aqt"
+version = "0.1.0"
+description = "A-share quant toolkit for personal learning and research."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+aqt = "aqt.cli:main"
+
