@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 .venv/
 venv/
-data/sample/
+data/*
+!data/
+!data/positions_template.csv
 reports/
-

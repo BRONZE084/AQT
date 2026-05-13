@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AQT 量化研究台</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" role="img">
+              <path d="M4 17.5 9.2 12l3.4 3.1L20 6.5" />
+              <path d="M4 4.5v15h16" />
+            </svg>
+          </div>
+          <div>
+            <h1>AQT</h1>
+            <p>A 股量化研究台</p>
+          </div>
+        </div>
+
+        <form id="settingsForm" class="settings-form">
+          <section class="control-group">
+            <h2>路径</h2>
+            <label>
+              数据目录
+              <input name="data_dir" value="data/sample" autocomplete="off" />
+            </label>
+            <label>
+              输出目录
+              <input name="out_dir" value="reports/demo" autocomplete="off" />
+            </label>
+            <label>
+              持仓文件
+              <input name="positions_file" value="" placeholder="可留空" autocomplete="off" />
+            </label>
+          </section>
+
+          <section class="control-group">
+            <h2>回测</h2>
+            <div class="field-grid">
+              <label>
+                开始
+                <input type="date" name="start" value="2023-07-03" />
+              </label>
+              <label>
+                结束
+                <input type="date" name="end" value="2024-12-31" />
+              </label>
+            </div>
+            <label>
+              初始资金
+              <input type="number" name="cash" value="1000000" step="10000" />
+            </label>
+          </section>
+
+          <section class="control-group">
+            <h2>策略</h2>
+            <div class="field-grid">
+              <label>
+                持仓数
+                <input type="number" name="top_n" value="8" min="1" max="50" />
+              </label>
+              <label>
+                单票上限
+                <input type="number" name="max_weight" value="0.15" step="0.01" />
+              </label>
+            </div>
+            <div class="field-grid">
+              <label>
+                现金缓冲
+                <input type="number" name="cash_buffer" value="0.02" step="0.01" />
+              </label>
+              <label>
+                最低成交额
+                <input type="number" name="min_amount" value="20000000" step="1000000" />
+              </label>
+            </div>
+          </section>
+
+          <section class="control-group">
+            <h2>样例数据</h2>
+            <div class="field-grid">
+              <label>
+                起始
+                <input type="date" name="sample_start" value="2022-01-04" />
+              </label>
+              <label>
+                截止
+                <input type="date" name="sample_end" value="2024-12-31" />
+              </label>
+            </div>
+          </section>
+        </form>
+
+        <div class="action-stack">
+          <button id="initSampleButton" class="button secondary" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+            生成样例数据
+          </button>
+          <button id="runBacktestButton" class="button primary" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 17 5-5 3 3 4-7" /><path d="M5 20h14" /></svg>
+            运行回测
+          </button>
+          <button id="runPlanButton" class="button secondary" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10v16H7z" /><path d="M9.5 8h5M9.5 12h5M9.5 16h3" /></svg>
+            生成交易计划
+          </button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <h2>研究概览</h2>
+            <p id="workspaceLabel">读取工作区状态...</p>
+          </div>
+          <div class="status-cluster">
+            <span id="dataStatus" class="status-pill pending">数据未确认</span>
+            <span id="reportStatus" class="status-pill pending">报告未确认</span>
+          </div>
+        </header>
+
+        <section class="hero-panel">
+          <div>
+            <h3>月度多因子策略</h3>
+            <p>日线研究、A 股交易规则模拟、回测报告与手动交易计划集中在一个本地界面。</p>
+          </div>
+          <div class="hero-rules">
+            <span>T+1</span>
+            <span>整百股</span>
+            <span>涨跌停</span>
+            <span>费用</span>
+          </div>
+        </section>
+
+        <section id="kpiGrid" class="kpi-grid" aria-live="polite"></section>
+
+        <section class="workspace-grid">
+          <div class="panel chart-panel">
+            <div class="panel-header">
+              <div>
+                <h3>净值曲线</h3>
+                <p>策略权益与基准走势</p>
+              </div>
+              <button id="refreshButton" class="icon-button" type="button" title="刷新报告">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7" /><path d="M20 4v6h-6" /></svg>
+              </button>
+            </div>
+            <canvas id="equityChart" width="900" height="360"></canvas>
+          </div>
+
+          <div class="panel files-panel">
+            <div class="panel-header">
+              <div>
+                <h3>输出文件</h3>
+                <p>本地生成结果</p>
+              </div>
+            </div>
+            <div id="fileList" class="file-list"></div>
+          </div>
+        </section>
+
+        <section class="panel table-panel">
+          <div class="tabs" role="tablist" aria-label="数据视图">
+            <button class="tab active" data-tab="trades" type="button">交易流水</button>
+            <button class="tab" data-tab="plan" type="button">交易计划</button>
+            <button class="tab" data-tab="summary" type="button">指标明细</button>
+          </div>
+          <div id="tabContent" class="tab-content"></div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
+

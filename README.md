@@ -18,6 +18,7 @@ AQT 是一套面向个人学习和研究的 A 股量化交易软件雏形。第�
 python -m aqt init-sample --data-dir data/sample
 python -m aqt backtest --data-dir data/sample --out-dir reports/demo --start 2023-07-03 --end 2024-12-31 --cash 1000000
 python -m aqt plan --data-dir data/sample --out-dir reports/demo --cash 1000000
+python -m aqt ui
 ```
 
 回测完成后查看：
@@ -27,6 +28,8 @@ python -m aqt plan --data-dir data/sample --out-dir reports/demo --cash 1000000
 - `reports/demo/equity_curve.csv`
 - `reports/demo/trades.csv`
 - `reports/demo/trade_plan_YYYYMMDD.csv`
+
+启动 UI 后在浏览器打开 `http://127.0.0.1:8765`。
 
 ## 数据格式
 

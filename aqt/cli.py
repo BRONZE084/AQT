@@ -8,6 +8,7 @@ from .backtest import BacktestConfig, Backtester, save_backtest_result
 from .data import DataStore, generate_sample_data, parse_date
 from .planner import PlanConfig, generate_trade_plan, load_positions, save_positions_template
 from .strategy import MultiFactorConfig, MultiFactorStrategy
+from .web import run_server
 
 
 def main() -> None:
@@ -47,6 +48,11 @@ def main() -> None:
     template_parser = subparsers.add_parser("positions-template", help="Create a positions CSV template.")
     template_parser.add_argument("--path", default="data/positions_template.csv")
 
+    ui_parser = subparsers.add_parser("ui", help="Start the local browser UI.")
+    ui_parser.add_argument("--host", default="127.0.0.1")
+    ui_parser.add_argument("--port", type=int, default=8765)
+    ui_parser.add_argument("--open", action="store_true", help="Open the UI in the default browser.")
+
     args = parser.parse_args()
 
     if args.command == "init-sample":
@@ -59,6 +65,10 @@ def main() -> None:
     if args.command == "positions-template":
         save_positions_template(args.path)
         print(f"Positions template written to {Path(args.path).resolve()}")
+        return
+
+    if args.command == "ui":
+        run_server(args.host, args.port, args.open)
         return
 
     if args.command == "backtest":
@@ -97,4 +107,3 @@ def main() -> None:
         )
         print(f"Trade plan written to {plan_path.resolve()}")
         return
-
