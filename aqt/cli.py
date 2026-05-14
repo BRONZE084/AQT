@@ -7,8 +7,20 @@ from pathlib import Path
 from .backtest import BacktestConfig, Backtester, save_backtest_result
 from .data import DataStore, generate_sample_data, parse_date
 from .planner import PlanConfig, generate_trade_plan, load_positions, save_positions_template
+from .strategies import STRATEGY_REGISTRY
 from .strategy import MultiFactorConfig, MultiFactorStrategy
 from .web import run_server
+
+
+def _build_strategy(name: str, args: argparse.Namespace):
+    entry = STRATEGY_REGISTRY[name]
+    config_cls = entry["config_cls"]
+    strategy_cls = entry["cls"]
+    if name == "multi_factor":
+        config = config_cls(top_n=args.top_n, min_amount=args.min_amount)
+    else:
+        config = config_cls()
+    return strategy_cls(config)
 
 
 def main() -> None:
@@ -33,6 +45,12 @@ def main() -> None:
     backtest_parser.add_argument("--max-weight", type=float, default=0.15)
     backtest_parser.add_argument("--cash-buffer", type=float, default=0.02)
     backtest_parser.add_argument("--min-amount", type=float, default=20_000_000.0)
+    backtest_parser.add_argument("--rebalance-freq", choices=["daily", "weekly", "monthly"], default="monthly")
+    backtest_parser.add_argument("--stop-loss", type=float, default=0.0)
+    backtest_parser.add_argument("--take-profit", type=float, default=0.0)
+    backtest_parser.add_argument(
+        "--strategy", choices=list(STRATEGY_REGISTRY), default="multi_factor"
+    )
 
     plan_parser = subparsers.add_parser("plan", help="Generate a manual trade plan from latest data.")
     plan_parser.add_argument("--data-dir", default="data/sample")
@@ -44,6 +62,9 @@ def main() -> None:
     plan_parser.add_argument("--max-weight", type=float, default=0.15)
     plan_parser.add_argument("--cash-buffer", type=float, default=0.02)
     plan_parser.add_argument("--min-amount", type=float, default=20_000_000.0)
+    plan_parser.add_argument(
+        "--strategy", choices=list(STRATEGY_REGISTRY), default="multi_factor"
+    )
 
     template_parser = subparsers.add_parser("positions-template", help="Create a positions CSV template.")
     template_parser.add_argument("--path", default="data/positions_template.csv")
@@ -73,15 +94,16 @@ def main() -> None:
 
     if args.command == "backtest":
         store = DataStore.load(args.data_dir)
-        strategy = MultiFactorStrategy(
-            MultiFactorConfig(top_n=args.top_n, min_amount=args.min_amount)
-        )
+        strategy = _build_strategy(args.strategy, args)
         config = BacktestConfig(
             start=parse_date(args.start),
             end=parse_date(args.end),
             initial_cash=args.cash,
             max_weight=args.max_weight,
             cash_buffer=args.cash_buffer,
+            rebalance_freq=args.rebalance_freq,
+            stop_loss_pct=args.stop_loss,
+            take_profit_pct=args.take_profit,
         )
         result = Backtester(store, strategy, config).run()
         save_backtest_result(result, args.out_dir)
@@ -92,9 +114,7 @@ def main() -> None:
 
     if args.command == "plan":
         store = DataStore.load(args.data_dir)
-        strategy = MultiFactorStrategy(
-            MultiFactorConfig(top_n=args.top_n, min_amount=args.min_amount)
-        )
+        strategy = _build_strategy(args.strategy, args)
         positions = load_positions(args.positions_file)
         as_of: date | None = parse_date(args.as_of) if args.as_of else None
         plan_path = generate_trade_plan(

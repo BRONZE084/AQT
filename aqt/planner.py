@@ -8,7 +8,7 @@ from pathlib import Path
 from .data import DataStore, format_date
 from .models import Position
 from .rules import round_lot
-from .strategy import MultiFactorStrategy
+from .strategy import Strategy
 
 
 @dataclass(frozen=True)
@@ -44,7 +44,7 @@ def save_positions_template(path: str | Path) -> None:
 
 def generate_trade_plan(
     store: DataStore,
-    strategy: MultiFactorStrategy,
+    strategy: Strategy,
     config: PlanConfig,
     out_dir: str | Path,
     as_of: date | None = None,

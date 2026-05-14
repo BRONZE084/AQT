@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlparse
 from .backtest import BacktestConfig, Backtester, save_backtest_result
 from .data import DataStore, generate_sample_data, parse_date
 from .planner import PlanConfig, generate_trade_plan, load_positions
+from .strategies import STRATEGY_REGISTRY
 from .strategy import MultiFactorConfig, MultiFactorStrategy
 
 
@@ -59,6 +60,10 @@ def run_backtest_job(payload: dict) -> dict:
         initial_cash=_float(payload.get("cash"), 1_000_000.0),
         max_weight=_float(payload.get("max_weight"), 0.15),
         cash_buffer=_float(payload.get("cash_buffer"), 0.02),
+        rebalance_freq=payload.get("rebalance_freq") or "monthly",
+        stop_loss_pct=_float(payload.get("stop_loss"), 0.0),
+        take_profit_pct=_float(payload.get("take_profit"), 0.0),
+        trailing_stop_pct=_float(payload.get("trailing_stop"), 0.0),
     )
     result = Backtester(store, strategy, config).run()
     save_backtest_result(result, out_dir)
@@ -262,13 +267,21 @@ def _trades_to_rows(trades: list) -> list[dict]:
     ]
 
 
-def _strategy_from_payload(payload: dict) -> MultiFactorStrategy:
-    return MultiFactorStrategy(
-        MultiFactorConfig(
+def _strategy_from_payload(payload: dict):
+    name = payload.get("strategy") or "multi_factor"
+    entry = STRATEGY_REGISTRY.get(name)
+    if entry is None:
+        raise ValueError(f"Unknown strategy: {name}")
+    config_cls = entry["config_cls"]
+    strategy_cls = entry["cls"]
+    if name == "multi_factor":
+        config = config_cls(
             top_n=int(payload.get("top_n") or 8),
             min_amount=_float(payload.get("min_amount"), 20_000_000.0),
         )
-    )
+    else:
+        config = config_cls()
+    return strategy_cls(config)
 
 
 def _safe_path(value: str | Path) -> Path:

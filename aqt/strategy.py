@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import math
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date
 
 from .data import DataStore
+from .math_utils import _rank, _stdev
 from .models import Signal
 
 
@@ -20,29 +21,17 @@ class MultiFactorConfig:
     quality_weight: float = 0.20
 
 
-def _stdev(values: list[float]) -> float:
-    if len(values) < 2:
-        return 0.0
-    mean = sum(values) / len(values)
-    variance = sum((item - mean) ** 2 for item in values) / (len(values) - 1)
-    return math.sqrt(variance)
+class Strategy(ABC):
+    @property
+    def mode(self) -> str:
+        return "rebalance"
+
+    @abstractmethod
+    def select(self, store: DataStore, as_of: date) -> list[Signal]:
+        ...
 
 
-def _rank(values: dict[str, float], higher_is_better: bool) -> dict[str, float]:
-    if not values:
-        return {}
-    ordered = sorted(values.items(), key=lambda item: item[1])
-    if len(ordered) == 1:
-        return {ordered[0][0]: 1.0}
-    result: dict[str, float] = {}
-    denominator = len(ordered) - 1
-    for idx, (symbol, _value) in enumerate(ordered):
-        percentile = idx / denominator
-        result[symbol] = percentile if higher_is_better else 1.0 - percentile
-    return result
-
-
-class MultiFactorStrategy:
+class MultiFactorStrategy(Strategy):
     def __init__(self, config: MultiFactorConfig | None = None) -> None:
         self.config = config or MultiFactorConfig()
 

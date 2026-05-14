@@ -59,6 +59,15 @@
 
           <section class="control-group">
             <h2>策略</h2>
+            <label>
+              策略类型
+              <select name="strategy">
+                <option value="multi_factor">多因子轮动</option>
+                <option value="ma_crossover">均线交叉</option>
+                <option value="breakout">通道突破</option>
+                <option value="mean_reversion">均值回归</option>
+              </select>
+            </label>
             <div class="field-grid">
               <label>
                 持仓数
@@ -77,6 +86,24 @@
               <label>
                 最低成交额
                 <input type="number" name="min_amount" value="20000000" step="1000000" />
+              </label>
+            </div>
+            <label>
+              调仓频率
+              <select name="rebalance_freq">
+                <option value="monthly">月度</option>
+                <option value="weekly">周度</option>
+                <option value="daily">日度</option>
+              </select>
+            </label>
+            <div class="field-grid">
+              <label>
+                止损 (%)
+                <input type="number" name="stop_loss" value="0" step="0.5" min="0" max="20" />
+              </label>
+              <label>
+                止盈 (%)
+                <input type="number" name="take_profit" value="0" step="0.5" min="0" max="50" />
               </label>
             </div>
           </section>

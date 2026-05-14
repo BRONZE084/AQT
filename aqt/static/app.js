@@ -67,6 +67,10 @@ function formValues() {
     max_weight: Number(values.max_weight),
     cash_buffer: Number(values.cash_buffer),
     min_amount: Number(values.min_amount),
+    strategy: values.strategy,
+    rebalance_freq: values.rebalance_freq,
+    stop_loss: Number(values.stop_loss),
+    take_profit: Number(values.take_profit),
     sample_start: values.sample_start,
     sample_end: values.sample_end,
   };

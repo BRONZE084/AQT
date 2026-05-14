@@ -42,3 +42,11 @@ def can_sell(bar: Bar) -> bool:
         return False
     return bar.open > bar.limit_down + 1e-6
 
+
+def min_trade_value(shares: int, price: float) -> float:
+    return shares * price
+
+
+def is_trade_too_small(shares: int, price: float, min_value: float = 500.0) -> bool:
+    return shares > 0 and shares * price < min_value
+
