@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import mimetypes
 import threading
+import time as _time_module
 import webbrowser
 from datetime import date
 from http import HTTPStatus
@@ -13,7 +15,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .backtest import BacktestConfig, Backtester, save_backtest_result
 from .data import DataStore, generate_sample_data, parse_date
-from .fetcher import fetch_daily
+from .fetcher import _tx_fetch_quotes, _tx_key, fetch_daily
 from .planner import PlanConfig, generate_trade_plan, load_positions
 from .strategies import STRATEGY_REGISTRY
 from .strategy import MultiFactorConfig, MultiFactorStrategy
@@ -21,6 +23,41 @@ from .strategy import MultiFactorConfig, MultiFactorStrategy
 
 WORKSPACE_ROOT = Path.cwd().resolve()
 STATIC_ROOT = Path(__file__).with_name("static")
+
+# DataStore cache to avoid reloading CSV on every kline/risk request
+_store_cache: dict[str, tuple[float, DataStore]] = {}
+_STORE_CACHE_TTL = 60.0
+
+
+def _get_store(data_dir: str | Path) -> DataStore:
+    key = str(_safe_path(data_dir))
+    now = _time_module.time()
+    if key in _store_cache:
+        ts, store = _store_cache[key]
+        if now - ts < _STORE_CACHE_TTL:
+            return store
+    store = DataStore.load(data_dir)
+    _store_cache[key] = (now, store)
+    return store
+
+
+# ── watchlist persistence ──
+
+def _watchlist_path(data_dir: str | Path) -> Path:
+    return Path(data_dir) / "watchlist.json"
+
+
+def _load_watchlist(data_dir: str | Path) -> list[dict]:
+    path = _watchlist_path(data_dir)
+    if not path.exists():
+        return []
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _save_watchlist(data_dir: str | Path, items: list[dict]) -> None:
+    path = _watchlist_path(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False) -> None:
@@ -116,6 +153,221 @@ def run_fetch_job(payload: dict) -> dict:
     }
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# New real-time endpoints
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_market_index_payload() -> dict:
+    index_keys = {
+        "sh000001": "上证指数",
+        "sz399001": "深证成指",
+        "sh000300": "沪深300",
+        "sz399006": "创业板指",
+    }
+    try:
+        quotes = _tx_fetch_quotes(list(index_keys))
+    except Exception as exc:
+        return {"ok": False, "error": f"Failed to fetch indices: {exc}"}
+
+    indices = []
+    for q in quotes:
+        pre = q["pre_close"]
+        chg = round((q["close"] - pre) / pre * 100, 2) if pre > 0 else 0.0
+        key = f"sh{q['symbol']}" if q["symbol"].startswith(("6", "0")) else f"sz{q['symbol']}"
+        indices.append({
+            "code": q["symbol"],
+            "name": index_keys.get(key, q["name"]),
+            "close": q["close"],
+            "change_pct": chg,
+        })
+    return {"ok": True, "indices": indices}
+
+
+def get_quotes_payload(symbols_str: str) -> dict:
+    symbols = [s.strip() for s in symbols_str.split(",") if s.strip()]
+    if not symbols:
+        return {"ok": False, "error": "No symbols provided"}
+    if len(symbols) > 50:
+        symbols = symbols[:50]
+    try:
+        raw = _tx_fetch_quotes([_tx_key(s) for s in symbols])
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+    quotes = []
+    for q in raw:
+        pre = q["pre_close"]
+        chg = round((q["close"] - pre) / pre * 100, 2) if pre > 0 else 0.0
+        quotes.append({
+            "symbol": q["symbol"], "name": q["name"],
+            "close": q["close"], "pre_close": pre,
+            "open": q["open"], "high": q["high"], "low": q["low"],
+            "volume": q["volume"], "amount": q["amount"],
+            "change_pct": chg, "pe": q["pe"], "pb": q["pb"],
+        })
+    return {"ok": True, "quotes": quotes}
+
+
+def get_kline_payload(query: dict[str, list[str]]) -> dict:
+    from .math_utils import sma as _sma
+
+    symbol = (_first(query, "symbol") or "").zfill(6)
+    if len(symbol) != 6 or not symbol.isdigit():
+        return {"ok": False, "error": "Invalid symbol"}
+    data_dir = _safe_path(_first(query, "data_dir") or "data/live")
+    days = min(int(_first(query, "days") or "120"), 500)
+
+    store = _get_store(data_dir)
+    bars = store.bars_until(symbol, store.latest_date(), days)
+    if not bars:
+        return {"ok": False, "error": f"No data for {symbol}"}
+
+    sec = store.universe.get(symbol)
+    name = sec.name if sec else ""
+
+    closes = [b.close for b in bars]
+    kline = [
+        {"date": b.date.isoformat(), "open": b.open, "close": b.close,
+         "low": b.low, "high": b.high, "volume": b.volume}
+        for b in bars
+    ]
+
+    def _ma(period: int) -> list[float | None]:
+        vals = _sma(closes, period)
+        return [None] * (len(closes) - len(vals)) + vals
+
+    return {
+        "ok": True, "symbol": symbol, "name": name, "kline": kline,
+        "ma5": _ma(5), "ma10": _ma(10), "ma20": _ma(20), "ma60": _ma(60),
+    }
+
+
+def get_watchlist_payload(query: dict[str, list[str]]) -> dict:
+    data_dir = _safe_path(_first(query, "data_dir") or "data/live")
+    return {"ok": True, "items": _load_watchlist(data_dir)}
+
+
+def handle_watchlist_post(payload: dict) -> dict:
+    data_dir = _safe_path(payload.get("data_dir") or "data/live")
+    items = _load_watchlist(data_dir)
+
+    if payload.get("_method") == "DELETE":
+        symbol = (payload.get("symbol") or "").zfill(6)
+        items = [w for w in items if w["symbol"] != symbol]
+        _save_watchlist(data_dir, items)
+        return {"ok": True, "items": items}
+
+    symbol = (payload.get("symbol") or "").zfill(6)
+    if len(symbol) != 6 or not symbol.isdigit():
+        return {"ok": False, "error": "Invalid symbol"}
+
+    existing = next((w for w in items if w["symbol"] == symbol), None)
+    if existing:
+        for field in ("buy_price", "stop_loss_price"):
+            if field in payload:
+                val = payload[field]
+                existing[field] = float(val) if val not in (None, "", 0) else None
+    else:
+        if len(items) >= 30:
+            return {"ok": False, "error": "Watchlist full (max 30)"}
+        name = ""
+        try:
+            qs = _tx_fetch_quotes([_tx_key(symbol)])
+            if qs:
+                name = qs[0]["name"]
+        except Exception:
+            pass
+        items.append({
+            "symbol": symbol,
+            "name": name,
+            "added_at": date.today().isoformat(),
+            "buy_price": float(payload["buy_price"]) if payload.get("buy_price") else None,
+            "stop_loss_price": float(payload["stop_loss_price"]) if payload.get("stop_loss_price") else None,
+        })
+
+    _save_watchlist(data_dir, items)
+    return {"ok": True, "items": items}
+
+
+def get_risk_payload(payload: dict) -> dict:
+    from .math_utils import _stdev as _std
+
+    symbol = (payload.get("symbol") or "").zfill(6)
+    if len(symbol) != 6 or not symbol.isdigit():
+        return {"ok": False, "error": "Invalid symbol"}
+    data_dir = _safe_path(payload.get("data_dir") or "data/live")
+    lookback = int(payload.get("lookback") or 60)
+
+    store = _get_store(data_dir)
+    bars = store.bars_until(symbol, store.latest_date(), lookback)
+    if len(bars) < 10:
+        return {"ok": False, "error": f"Need at least 10 bars, got {len(bars)}"}
+
+    returns = []
+    for i in range(1, len(bars)):
+        if bars[i - 1].close > 0:
+            returns.append((bars[i].close - bars[i - 1].close) / bars[i - 1].close)
+    vol = _std(returns) if len(returns) >= 2 else 0.0
+    vol_risk = round(1.0 / (1.0 + math.exp(-3 * (vol - 0.025) / 0.01)), 4) if vol > 0 else 0.5
+
+    fund = store.latest_fundamental(symbol, store.latest_date())
+    val_risk = 0.5
+    if fund:
+        if fund.pe_ttm > 0:
+            if fund.pe_ttm > 100:
+                val_risk = 0.9
+            elif fund.pe_ttm < 5:
+                val_risk = 0.7
+            else:
+                val_risk = min(1.0, max(0.0, (fund.pe_ttm - 10) / 90))
+        if fund.pb > 0:
+            pb_risk = min(1.0, max(0.0, (fund.pb - 1) / 9))
+            val_risk = 0.5 * val_risk + 0.5 * pb_risk
+
+    qual_risk = 0.5
+    if fund and fund.roe_ttm > 0:
+        qual_risk = max(0.0, 1.0 - fund.roe_ttm / 0.20)
+
+    risk_score = round(0.4 * vol_risk + 0.3 * val_risk + 0.3 * qual_risk, 4)
+    risk_score = max(0.0, min(1.0, risk_score))
+
+    if risk_score < 0.33:
+        risk_level = "low"
+    elif risk_score < 0.66:
+        risk_level = "medium"
+    else:
+        risk_level = "high"
+
+    latest = bars[-1]
+    suitable = (
+        risk_level != "high"
+        and not latest.paused
+        and latest.open > 0
+        and latest.open < latest.limit_up
+    )
+
+    reasons: list[str] = []
+    if risk_level == "low":
+        reasons.append("风险较低")
+    elif risk_level == "medium":
+        reasons.append("风险中等")
+    else:
+        reasons.append("风险较高")
+    if latest.paused:
+        reasons.append("停牌中")
+
+    return {
+        "ok": True, "symbol": symbol,
+        "risk_score": risk_score, "risk_level": risk_level,
+        "factors": {"volatility_risk": vol_risk, "valuation_risk": round(val_risk, 4), "quality_risk": round(qual_risk, 4)},
+        "suitable_to_buy": suitable, "reasons": reasons,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Original read endpoints
+# ══════════════════════════════════════════════════════════════════════════════
+
 def read_report_payload(out_dir_value: str | None = None) -> dict:
     out_dir = _safe_path(out_dir_value or "reports/demo")
     summary_path = out_dir / "summary.json"
@@ -179,6 +431,21 @@ class AQTRequestHandler(BaseHTTPRequestHandler):
             query = parse_qs(parsed.query)
             self._send_json(HTTPStatus.OK, read_report_payload(_first(query, "out_dir")))
             return
+        if parsed.path == "/api/market-index":
+            self._send_json(HTTPStatus.OK, get_market_index_payload())
+            return
+        if parsed.path == "/api/quotes":
+            query = parse_qs(parsed.query)
+            self._send_json(HTTPStatus.OK, get_quotes_payload(_first(query, "symbols") or ""))
+            return
+        if parsed.path == "/api/kline":
+            query = parse_qs(parsed.query)
+            self._send_json(HTTPStatus.OK, get_kline_payload(query))
+            return
+        if parsed.path == "/api/watchlist":
+            query = parse_qs(parsed.query)
+            self._send_json(HTTPStatus.OK, get_watchlist_payload(query))
+            return
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found"})
 
     def do_POST(self) -> None:
@@ -187,6 +454,8 @@ class AQTRequestHandler(BaseHTTPRequestHandler):
             "/api/backtest": run_backtest_job,
             "/api/plan": run_plan_job,
             "/api/fetch": run_fetch_job,
+            "/api/watchlist": handle_watchlist_post,
+            "/api/risk-assessment": get_risk_payload,
         }
         parsed = urlparse(self.path)
         job = routes.get(parsed.path)

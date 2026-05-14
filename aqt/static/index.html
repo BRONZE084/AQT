@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AQT 量化研究台</title>
     <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -27,7 +28,7 @@
             <h2>路径</h2>
             <label>
               数据目录
-              <input name="data_dir" value="data/sample" autocomplete="off" />
+              <input name="data_dir" value="data/live" autocomplete="off" />
             </label>
             <label>
               输出目录
@@ -144,6 +145,28 @@
       </aside>
 
       <main class="main">
+        <div id="indexTicker" class="index-ticker">
+          <div class="index-ticker-inner">
+            <span class="index-item" data-code="000001">
+              <strong>上证</strong> <span class="idx-price">--</span>
+              <span class="idx-change">--</span>
+            </span>
+            <span class="index-item" data-code="399001">
+              <strong>深证</strong> <span class="idx-price">--</span>
+              <span class="idx-change">--</span>
+            </span>
+            <span class="index-item" data-code="000300">
+              <strong>沪深300</strong> <span class="idx-price">--</span>
+              <span class="idx-change">--</span>
+            </span>
+            <span class="index-item" data-code="399006">
+              <strong>创业板</strong> <span class="idx-price">--</span>
+              <span class="idx-change">--</span>
+            </span>
+          </div>
+          <span id="marketTime" class="market-time">--</span>
+        </div>
+
         <header class="topbar">
           <div>
             <h2>研究概览</h2>
@@ -157,8 +180,8 @@
 
         <section class="hero-panel">
           <div>
-            <h3>月度多因子策略</h3>
-            <p>日线研究、A 股交易规则模拟、回测报告与手动交易计划集中在一个本地界面。</p>
+            <h3>多策略量化研究</h3>
+            <p>日线研究、A 股交易规则模拟、实时行情看板、K 线分析与手动交易计划集中在一个本地界面。</p>
           </div>
           <div class="hero-rules">
             <span>T+1</span>
@@ -174,17 +197,43 @@
           <div class="panel chart-panel">
             <div class="panel-header">
               <div>
-                <h3>净值曲线</h3>
-                <p>策略权益与基准走势</p>
+                <h3 id="chartTitle">K线图</h3>
+                <p id="klineSymbolLabel">输入股票代码查看</p>
               </div>
-              <button id="refreshButton" class="icon-button" type="button" title="刷新报告">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7" /><path d="M20 4v6h-6" /></svg>
-              </button>
+              <div class="chart-controls">
+                <div class="chart-toggle">
+                  <button class="tab active" data-chart="kline" type="button">K线图</button>
+                  <button class="tab" data-chart="equity" type="button">净值曲线</button>
+                </div>
+                <div class="kline-controls" id="klineControls">
+                  <input id="symbolSearch" type="text" class="symbol-search"
+                         placeholder="输入代码 如 600000" maxlength="6"
+                         autocomplete="off" />
+                  <button id="searchButton" class="icon-button" type="button" title="查询">
+                    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                  </button>
+                  <button id="addWatchlistButton" class="icon-button" type="button" title="加入自选">
+                    <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+                  </button>
+                </div>
+                <button id="refreshButton" class="icon-button" type="button" title="刷新报告" style="display:none">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7" /><path d="M20 4v6h-6" /></svg>
+                </button>
+              </div>
             </div>
-            <canvas id="equityChart" width="900" height="360"></canvas>
+            <div id="klineChart" class="kline-container"></div>
+            <canvas id="equityChart" width="900" height="360" style="display:none"></canvas>
           </div>
 
           <div class="panel files-panel">
+            <div class="panel-header">
+              <div>
+                <h3>自选股</h3>
+                <p id="watchlistCount">--</p>
+              </div>
+            </div>
+            <div id="watchlistContainer" class="watchlist-items"></div>
+            <hr class="panel-divider" />
             <div class="panel-header">
               <div>
                 <h3>输出文件</h3>
@@ -199,6 +248,7 @@
           <div class="tabs" role="tablist" aria-label="数据视图">
             <button class="tab active" data-tab="trades" type="button">交易流水</button>
             <button class="tab" data-tab="plan" type="button">交易计划</button>
+            <button class="tab" data-tab="watchlist" type="button">自选股</button>
             <button class="tab" data-tab="summary" type="button">指标明细</button>
           </div>
           <div id="tabContent" class="tab-content"></div>
@@ -210,4 +260,3 @@
     <script src="/static/app.js"></script>
   </body>
 </html>
-

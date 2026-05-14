@@ -6,7 +6,19 @@ const state = {
   files: {},
   activeTab: "trades",
   busy: false,
+  chartMode: "kline",
+  quotes: {},
+  indices: [],
+  watchlist: [],
+  klineSymbol: null,
+  klineData: null,
+  klineDays: 120,
+  riskScores: {},
+  marketOpen: false,
+  pollingTimer: null,
 };
+
+let klineChart = null;
 
 const form = document.querySelector("#settingsForm");
 const toast = document.querySelector("#toast");
@@ -35,13 +47,40 @@ const columns = {
     ["estimated_notional", "估算金额"],
     ["notes", "备注"],
   ],
+  watchlist: [
+    ["symbol", "代码"],
+    ["name", "名称"],
+    ["price", "现价"],
+    ["change_pct", "涨跌"],
+    ["buy_price", "买入价"],
+    ["stop_loss", "止损价"],
+    ["added_at", "加入时间"],
+    ["risk_score", "风险分"],
+    ["risk_level", "风险等级"],
+    ["suitable", "适合买入"],
+  ],
 };
+
+// ── Event wiring ──
 
 document.querySelector("#initSampleButton").addEventListener("click", () => runInitSample());
 document.querySelector("#fetchDataButton").addEventListener("click", () => runFetch());
 document.querySelector("#runBacktestButton").addEventListener("click", () => runBacktest());
 document.querySelector("#runPlanButton").addEventListener("click", () => runPlan());
 document.querySelector("#refreshButton").addEventListener("click", () => loadReport());
+document.querySelector("#searchButton").addEventListener("click", () => {
+  const symbol = document.querySelector("#symbolSearch").value.trim();
+  if (symbol) loadKline(symbol);
+});
+document.querySelector("#symbolSearch").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    const symbol = e.target.value.trim();
+    if (symbol) loadKline(symbol);
+  }
+});
+document.querySelector("#addWatchlistButton").addEventListener("click", () => {
+  if (state.klineSymbol) addToWatchlist(state.klineSymbol);
+});
 
 document.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => {
@@ -50,10 +89,32 @@ document.querySelectorAll(".tab").forEach((button) => {
   });
 });
 
-window.addEventListener("resize", () => drawChart());
+document.querySelectorAll(".chart-toggle .tab").forEach((button) => {
+  button.addEventListener("click", () => {
+    state.chartMode = button.dataset.chart;
+    document.querySelectorAll(".chart-toggle .tab").forEach((b) =>
+      b.classList.toggle("active", b.dataset.chart === state.chartMode)
+    );
+    renderChartMode();
+  });
+});
+
+window.addEventListener("resize", () => {
+  if (state.chartMode === "equity") drawChart();
+  if (klineChart) klineChart.resize();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) stopPolling();
+  else startPolling();
+});
+
+// ── Initial load ──
 
 loadStatus();
 loadReport();
+
+// ── Form helpers ──
 
 function formValues() {
   const values = Object.fromEntries(new FormData(form).entries());
@@ -77,6 +138,8 @@ function formValues() {
   };
 }
 
+// ── API helpers ──
+
 async function apiGet(path) {
   const response = await fetch(path);
   const payload = await response.json();
@@ -99,6 +162,8 @@ async function apiPost(path, payload) {
   return body;
 }
 
+// ── Status & Report ──
+
 async function loadStatus() {
   const values = formValues();
   try {
@@ -112,6 +177,8 @@ async function loadStatus() {
     setStatus("#reportStatus", payload.report_ready, payload.report_ready ? "报告已生成" : "报告未生成");
     state.files = payload.files || state.files;
     renderFiles();
+    loadWatchlist();
+    startPolling();
   } catch (error) {
     showToast(error.message);
   }
@@ -128,6 +195,8 @@ async function loadReport() {
     renderEmpty();
   }
 }
+
+// ── Actions ──
 
 async function runInitSample() {
   const values = formValues();
@@ -202,18 +271,47 @@ function applyPayload(payload) {
   renderAll();
 }
 
+// ── Rendering ──
+
 function renderAll() {
   renderKpis();
-  drawChart();
+  renderChartMode();
   renderFiles();
+  renderWatchlist();
   renderTabs();
 }
 
 function renderEmpty() {
   renderKpis();
-  drawChart();
+  renderChartMode();
   renderFiles();
+  renderWatchlist();
   renderTabs();
+}
+
+function renderChartMode() {
+  const klineDiv = document.querySelector("#klineChart");
+  const canvas = document.querySelector("#equityChart");
+  const klineControls = document.querySelector("#klineControls");
+  const refreshBtn = document.querySelector("#refreshButton");
+  const chartTitle = document.querySelector("#chartTitle");
+  const chartSub = document.querySelector("#klineSymbolLabel");
+
+  if (state.chartMode === "kline") {
+    klineDiv.style.display = "";
+    canvas.style.display = "none";
+    klineControls.style.display = "";
+    refreshBtn.style.display = "none";
+    chartTitle.textContent = "K线图";
+  } else {
+    klineDiv.style.display = "none";
+    canvas.style.display = "";
+    klineControls.style.display = "none";
+    refreshBtn.style.display = "";
+    chartTitle.textContent = "净值曲线";
+    chartSub.textContent = "策略权益与基准走势";
+    drawChart();
+  }
 }
 
 function renderKpis() {
@@ -245,6 +343,8 @@ function renderKpis() {
     )
     .join("");
 }
+
+// ── Canvas equity curve (preserved) ──
 
 function drawChart() {
   const canvas = document.querySelector("#equityChart");
@@ -348,19 +448,339 @@ function drawLegend(context, width) {
   });
 }
 
-function renderFiles() {
-  const container = document.querySelector("#fileList");
-  const entries = Object.entries(state.files || {}).filter(([, value]) => value);
-  if (!entries.length) {
-    container.innerHTML = '<div class="empty-state">暂无输出文件</div>';
+// ── Polling ──
+
+function isMarketOpen() {
+  const now = new Date();
+  const day = now.getDay();
+  if (day === 0 || day === 6) return false;
+  const t = now.getHours() * 100 + now.getMinutes();
+  return (t >= 930 && t <= 1130) || (t >= 1300 && t <= 1500);
+}
+
+function startPolling() {
+  state.marketOpen = isMarketOpen();
+  renderMarketTime();
+  pollData();
+  if (state.pollingTimer) clearInterval(state.pollingTimer);
+  const interval = state.marketOpen ? 8000 : 30000;
+  state.pollingTimer = setInterval(() => {
+    state.marketOpen = isMarketOpen();
+    renderMarketTime();
+    pollData();
+  }, interval);
+}
+
+function stopPolling() {
+  if (state.pollingTimer) {
+    clearInterval(state.pollingTimer);
+    state.pollingTimer = null;
+  }
+}
+
+async function pollData() {
+  if (state.busy) return;
+  try {
+    const idxPayload = await apiGet("/api/market-index");
+    state.indices = idxPayload.indices || [];
+    renderIndices();
+  } catch (e) { /* silent */ }
+
+  const symbols = new Set(state.watchlist.map((w) => w.symbol));
+  if (state.klineSymbol) symbols.add(state.klineSymbol);
+  if (symbols.size > 0) {
+    try {
+      const qPayload = await apiGet(`/api/quotes?symbols=${[...symbols].join(",")}`);
+      for (const q of qPayload.quotes || []) {
+        state.quotes[q.symbol] = q;
+      }
+      renderWatchlist();
+      renderWatchlistTab();
+      updateKlineOverlay();
+    } catch (e) { /* silent */ }
+  }
+}
+
+// ── Market index render ──
+
+function renderIndices() {
+  document.querySelectorAll(".index-item").forEach((el) => {
+    const code = el.dataset.code;
+    const idx = state.indices.find((i) => i.code === code);
+    if (!idx) return;
+    el.querySelector(".idx-price").textContent = idx.close.toFixed(2);
+    const changeEl = el.querySelector(".idx-change");
+    const pct = idx.change_pct;
+    changeEl.textContent = (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%";
+    changeEl.className = "idx-change " + (pct >= 0 ? "up" : "down");
+    el.className = "index-item " + (pct >= 0 ? "up" : "down");
+  });
+}
+
+function renderMarketTime() {
+  const el = document.querySelector("#marketTime");
+  if (state.marketOpen) {
+    el.textContent = "交易中";
+    el.className = "market-time open";
+  } else {
+    el.textContent = "已收盘";
+    el.className = "market-time closed";
+  }
+}
+
+// ── ECharts K-line ──
+
+function initKlineChart() {
+  const dom = document.querySelector("#klineChart");
+  if (klineChart) klineChart.dispose();
+  klineChart = echarts.init(dom);
+}
+
+async function loadKline(symbol) {
+  const values = formValues();
+  try {
+    const payload = await apiGet(
+      `/api/kline?symbol=${symbol}&days=${state.klineDays}&data_dir=${encodeURIComponent(values.data_dir)}`
+    );
+    state.klineData = payload;
+    state.klineSymbol = symbol;
+    document.querySelector("#klineSymbolLabel").textContent =
+      (payload.name ? payload.name + " — " : "") + `${state.klineDays}日K线`;
+    renderKlineChart();
+    fetchRiskAssessment(symbol);
+  } catch (e) {
+    showToast("未找到该股票数据: " + e.message);
+  }
+}
+
+function renderKlineChart() {
+  if (!klineChart) initKlineChart();
+  const data = state.klineData;
+  if (!data || !data.kline || !data.kline.length) return;
+
+  const dates = data.kline.map((d) => d.date);
+  const ohlc = data.kline.map((d) => [d.open, d.close, d.low, d.high]);
+  const volumes = data.kline.map((d) => d.volume);
+
+  const option = {
+    animation: false,
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "cross" },
+    },
+    axisPointer: { link: [{ xAxisIndex: "all" }] },
+    grid: [
+      { left: "60", right: "20", top: "20", height: "60%" },
+      { left: "60", right: "20", top: "80%", height: "16%" },
+    ],
+    xAxis: [
+      { type: "category", data: dates, gridIndex: 0, axisLabel: { show: false }, boundaryGap: true },
+      { type: "category", data: dates, gridIndex: 1, axisLabel: { show: false }, boundaryGap: true },
+    ],
+    yAxis: [
+      { scale: true, gridIndex: 0, splitArea: { show: true } },
+      {
+        scale: true, gridIndex: 1, splitNumber: 2,
+        axisLabel: { formatter: (v) => v > 1e8 ? (v / 1e8).toFixed(1) + "亿" : (v / 1e4).toFixed(0) + "万" },
+      },
+    ],
+    series: [
+      {
+        name: "K线", type: "candlestick", data: ohlc,
+        xAxisIndex: 0, yAxisIndex: 0,
+        itemStyle: { color: "#c14d32", color0: "#176b5b", borderColor: "#c14d32", borderColor0: "#176b5b" },
+      },
+      { name: "MA5", type: "line", data: data.ma5, xAxisIndex: 0, yAxisIndex: 0,
+        smooth: true, lineStyle: { width: 1, color: "#e6b422" }, symbol: "none" },
+      { name: "MA10", type: "line", data: data.ma10, xAxisIndex: 0, yAxisIndex: 0,
+        smooth: true, lineStyle: { width: 1, color: "#4a90d9" }, symbol: "none" },
+      { name: "MA20", type: "line", data: data.ma20, xAxisIndex: 0, yAxisIndex: 0,
+        smooth: true, lineStyle: { width: 1, color: "#9b59b6" }, symbol: "none" },
+      { name: "MA60", type: "line", data: data.ma60, xAxisIndex: 0, yAxisIndex: 0,
+        smooth: true, lineStyle: { width: 1, color: "#e74c3c" }, symbol: "none" },
+      {
+        name: "成交量", type: "bar", xAxisIndex: 1, yAxisIndex: 1,
+        data: volumes.map((v, i) => ({
+          value: v,
+          itemStyle: { color: ohlc[i][1] >= ohlc[i][0] ? "#c14d32" : "#176b5b" },
+        })),
+      },
+    ],
+  };
+  klineChart.setOption(option, true);
+}
+
+function updateKlineOverlay() {
+  const symbol = state.klineSymbol;
+  if (!symbol) return;
+  const q = state.quotes[symbol];
+  const risk = state.riskScores[symbol];
+  if (!q && !risk) return;
+  let html = (q ? q.name || symbol : symbol) + " — " + state.klineDays + "日K线";
+  if (q) html += ` | 现价: ${q.close.toFixed(2)} (${q.change_pct >= 0 ? "+" : ""}${q.change_pct.toFixed(2)}%)`;
+  if (risk) {
+    html += ` | 风险: ${risk.risk_level} (${(risk.risk_score * 100).toFixed(0)})`;
+    html += risk.suitable_to_buy
+      ? ' <span class="buy-indicator suitable">适合买入</span>'
+      : ' <span class="buy-indicator not-suitable">暂不建议</span>';
+  }
+  document.querySelector("#klineSymbolLabel").innerHTML = html;
+}
+
+// ── Risk assessment ──
+
+async function fetchRiskAssessment(symbol) {
+  const values = formValues();
+  try {
+    const p = await apiPost("/api/risk-assessment", {
+      symbol: symbol,
+      data_dir: values.data_dir,
+      lookback: 60,
+    });
+    state.riskScores[symbol] = {
+      risk_score: p.risk_score,
+      risk_level: p.risk_level,
+      factors: p.factors,
+      suitable_to_buy: p.suitable_to_buy,
+      reasons: p.reasons,
+    };
+    updateKlineOverlay();
+    renderWatchlist();
+    renderWatchlistTab();
+  } catch (e) { /* data may be too sparse */ }
+}
+
+// ── Watchlist ──
+
+async function loadWatchlist() {
+  const values = formValues();
+  try {
+    const p = await apiGet(`/api/watchlist?data_dir=${encodeURIComponent(values.data_dir)}`);
+    state.watchlist = p.items || [];
+    renderWatchlist();
+    renderWatchlistTab();
+  } catch (e) { /* ignore */ }
+}
+
+async function addToWatchlist(symbol) {
+  const values = formValues();
+  try {
+    await apiPost("/api/watchlist", { symbol, data_dir: values.data_dir });
+    await loadWatchlist();
+    showToast(`已添加 ${symbol} 到自选股`);
+  } catch (e) { showToast(e.message); }
+}
+
+async function removeFromWatchlist(symbol) {
+  const values = formValues();
+  try {
+    await apiPost("/api/watchlist", {
+      _method: "DELETE", symbol, data_dir: values.data_dir,
+    });
+    state.watchlist = state.watchlist.filter((w) => w.symbol !== symbol);
+    renderWatchlist();
+    renderWatchlistTab();
+  } catch (e) { showToast(e.message); }
+}
+
+async function updateWatchlistItem(symbol, field, value) {
+  const values = formValues();
+  try {
+    await apiPost("/api/watchlist", {
+      symbol, data_dir: values.data_dir, [field]: value || null,
+    });
+    await loadWatchlist();
+  } catch (e) { /* ignore */ }
+}
+
+function renderWatchlist() {
+  const container = document.querySelector("#watchlistContainer");
+  const countEl = document.querySelector("#watchlistCount");
+
+  if (!state.watchlist.length) {
+    container.innerHTML = '<div class="empty-state">暂无自选股<br/>在K线图输入代码后点击 + 添加</div>';
+    countEl.textContent = "0 只";
     return;
   }
-  container.innerHTML = entries
-    .map(([key, value]) => {
-      return `<div class="file-item"><strong>${escapeHtml(fileLabel(key))}</strong><span>${escapeHtml(value)}</span></div>`;
-    })
-    .join("");
+  countEl.textContent = `${state.watchlist.length} 只`;
+
+  container.innerHTML = state.watchlist.map((w) => {
+    const q = state.quotes[w.symbol];
+    const price = q ? q.close.toFixed(2) : "--";
+    const change = q ? q.change_pct : null;
+    const cls = change !== null ? (change >= 0 ? "up" : "down") : "";
+    const changeStr = change !== null ? (change >= 0 ? "+" : "") + change.toFixed(2) + "%" : "--";
+    const risk = state.riskScores[w.symbol];
+    const buyPrice = w.buy_price || "";
+    const stopLoss = w.stop_loss_price || "";
+
+    return `
+      <div class="watchlist-item" data-symbol="${w.symbol}">
+        <div class="wl-header">
+          <strong class="wl-clickable" title="查看K线">${escapeHtml(w.symbol)}</strong>
+          <small>${escapeHtml(q ? q.name : (w.name || ""))}</small>
+        </div>
+        <div class="wl-price">
+          <span class="price-value">${price}</span>
+          <span class="price-change ${cls}">${changeStr}</span>
+        </div>
+        ${risk ? `
+          <div class="wl-risk risk-${risk.risk_level}">
+            风险${(risk.risk_score * 100).toFixed(0)} · ${risk.suitable_to_buy ? "建议买入" : "暂不建议"}
+          </div>
+        ` : ""}
+        <div class="wl-actions">
+          <input class="wl-input" type="number" step="0.01" placeholder="买入价"
+                 value="${buyPrice}"
+                 onchange="updateWatchlistItem('${w.symbol}','buy_price',this.value)" />
+          <input class="wl-input" type="number" step="0.01" placeholder="止损价"
+                 value="${stopLoss}"
+                 onchange="updateWatchlistItem('${w.symbol}','stop_loss_price',this.value)" />
+          <button class="wl-remove" title="移除" onclick="event.stopPropagation();removeFromWatchlist('${w.symbol}')">&times;</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  // Wire click-to-load-kline
+  container.querySelectorAll(".wl-clickable").forEach((el) => {
+    el.addEventListener("click", () => {
+      const sym = el.closest(".watchlist-item").dataset.symbol;
+      document.querySelector("#symbolSearch").value = sym;
+      loadKline(sym);
+    });
+  });
 }
+
+function renderWatchlistTab() {
+  if (state.activeTab !== "watchlist") return;
+  const content = document.querySelector("#tabContent");
+  if (!state.watchlist.length) {
+    content.innerHTML = '<div class="empty-state">暂无自选股</div>';
+    return;
+  }
+
+  const rows = state.watchlist.map((w) => {
+    const q = state.quotes[w.symbol] || {};
+    const risk = state.riskScores[w.symbol];
+    return {
+      symbol: w.symbol,
+      name: q.name || w.name || "",
+      price: q.close != null ? q.close.toFixed(2) : "--",
+      change_pct: q.change_pct != null ? (q.change_pct >= 0 ? "+" : "") + q.change_pct.toFixed(2) + "%" : "--",
+      buy_price: w.buy_price != null ? w.buy_price : "--",
+      stop_loss: w.stop_loss_price != null ? w.stop_loss_price : "--",
+      added_at: w.added_at || "--",
+      risk_score: risk ? (risk.risk_score * 100).toFixed(0) : "--",
+      risk_level: risk ? risk.risk_level : "--",
+      suitable: risk ? (risk.suitable_to_buy ? "是" : "否") : "--",
+    };
+  });
+
+  content.innerHTML = renderTable(rows, columns.watchlist);
+}
+
+// ── Tabs ──
 
 function renderTabs() {
   document.querySelectorAll(".tab").forEach((button) => {
@@ -369,6 +789,10 @@ function renderTabs() {
   const content = document.querySelector("#tabContent");
   if (state.activeTab === "summary") {
     content.innerHTML = renderSummary();
+    return;
+  }
+  if (state.activeTab === "watchlist") {
+    renderWatchlistTab();
     return;
   }
   const rows = state.activeTab === "trades" ? state.trades : state.plan;
@@ -395,16 +819,18 @@ function renderTable(rows, tableColumns) {
     .map((row) => {
       const cells = tableColumns
         .map(([key]) => {
-          const value = row[key] ?? "";
-          const className =
-            key === "side" || key === "action"
-              ? value === "buy"
-                ? "side-buy"
-                : value === "sell"
-                ? "side-sell"
-                : ""
-              : "";
-          return `<td class="${className}">${escapeHtml(String(value))}</td>`;
+          const value = row[key] != null ? row[key] : "";
+          let cls = "";
+          if (key === "side" || key === "action") {
+            cls = value === "buy" ? "side-buy" : value === "sell" ? "side-sell" : "";
+          }
+          if (key === "suitable") {
+            cls = value === "是" ? "side-buy" : "side-sell";
+          }
+          if (key === "change_pct" && typeof value === "string") {
+            cls = value.startsWith("+") ? "side-buy" : value.startsWith("-") ? "side-sell" : "";
+          }
+          return `<td class="${cls}">${escapeHtml(String(value))}</td>`;
         })
         .join("");
       return `<tr>${cells}</tr>`;
@@ -412,6 +838,24 @@ function renderTable(rows, tableColumns) {
     .join("");
   return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
+
+// ── File list ──
+
+function renderFiles() {
+  const container = document.querySelector("#fileList");
+  const entries = Object.entries(state.files || {}).filter(([, value]) => value);
+  if (!entries.length) {
+    container.innerHTML = '<div class="empty-state">暂无输出文件</div>';
+    return;
+  }
+  container.innerHTML = entries
+    .map(([key, value]) => {
+      return `<div class="file-item"><strong>${escapeHtml(fileLabel(key))}</strong><span>${escapeHtml(value)}</span></div>`;
+    })
+    .join("");
+}
+
+// ── Utilities ──
 
 function setStatus(selector, ready, text) {
   const element = document.querySelector(selector);
@@ -463,11 +907,10 @@ function fileLabel(key) {
 }
 
 function escapeHtml(value) {
-  return value
+  return String(value)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 }
-

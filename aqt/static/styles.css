@@ -549,3 +549,307 @@ td {
     align-items: flex-start;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Index ticker bar
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.index-ticker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+
+.index-ticker-inner {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.index-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.index-item strong {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.index-item .idx-price {
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.index-item .idx-change {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.index-item .idx-change.up,
+.index-item.up .idx-price {
+  color: var(--accent-2);
+}
+
+.index-item .idx-change.down,
+.index-item.down .idx-price {
+  color: var(--accent);
+}
+
+.market-time {
+  font-size: 11px;
+  font-weight: 750;
+  padding: 4px 10px;
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+
+.market-time.open {
+  color: var(--accent-2);
+  background: #fef0ef;
+  border: 1px solid #f5c6cb;
+}
+
+.market-time.closed {
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   K-line chart
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.kline-container {
+  width: 100%;
+  height: 420px;
+  border-radius: 7px;
+  background: #fbfcfc;
+  border: 1px solid #edf1ef;
+}
+
+.chart-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chart-toggle {
+  display: flex;
+  gap: 4px;
+}
+
+.kline-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.symbol-search {
+  width: 130px;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 10px;
+  font-size: 13px;
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+}
+
+.symbol-search:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(23, 107, 91, 0.12);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Watchlist sidebar
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.watchlist-items {
+  display: grid;
+  gap: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.watchlist-item {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  display: grid;
+  gap: 4px;
+  background: var(--surface);
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.watchlist-item:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.wl-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wl-clickable {
+  font-size: 14px;
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.wl-clickable:hover {
+  text-decoration: underline;
+}
+
+.wl-header small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.wl-price {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.wl-price .price-value {
+  font-size: 18px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.wl-price .price-change.up {
+  color: var(--accent-2);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.wl-price .price-change.down {
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.wl-risk {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 4px;
+  display: inline-block;
+  width: fit-content;
+}
+
+.wl-risk.risk-low {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.wl-risk.risk-medium {
+  background: #fff7e6;
+  color: var(--warning);
+}
+
+.wl-risk.risk-high {
+  background: #fef0ef;
+  color: var(--danger);
+}
+
+.wl-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.wl-input {
+  width: 68px;
+  min-height: 28px !important;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 6px;
+  font-size: 12px;
+  background: var(--surface);
+}
+
+.wl-remove {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--danger);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  margin-left: auto;
+  padding: 0;
+}
+
+.wl-remove:hover {
+  background: #fef0ef;
+  border-color: #f5c6cb;
+  transform: translateY(-1px);
+}
+
+.panel-divider {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 14px 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Buy indicator
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.buy-indicator {
+  font-size: 12px;
+  font-weight: 750;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.buy-indicator.suitable {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.buy-indicator.not-suitable {
+  color: var(--warning);
+  background: #fff7e6;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Responsive adjustments
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 720px) {
+  .index-ticker {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .index-ticker-inner {
+    gap: 14px;
+  }
+
+  .kline-container {
+    height: 300px;
+  }
+
+  .chart-controls {
+    flex-wrap: wrap;
+  }
+}
