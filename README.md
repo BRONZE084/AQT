@@ -4,20 +4,36 @@ AQT 是一套面向个人学习和研究的 A 股量化交易软件雏形。第�
 
 - 本地 CSV 数据管理
 - A 股常见交易规则模拟：T+1、整百股、停牌、涨跌停、费用
+- **每日真实数据拉取**：从公开行情接口获取当日 A 股全量数据
 - 月度调仓多因子选股策略
 - 回测、交易流水、净值曲线和 Markdown 报告
 - 根据最新数据生成次日手动交易计划
 
 它不是自动下单工具，也不构成投资建议。实盘自动交易前，请先向券商确认程序化交易报告、接口权限和合规要求。
 
-## 快速开始
-
-当前版本只依赖 Python 标准库，Python 3.10 可直接运行。
+## 依赖安装
 
 ```powershell
+# 核心依赖（数据拉取必需）
+python -m pip install akshare
+
+# 可选：提升 EastMoney 接口的稳定性（绕过反爬检测）
+python -m pip install curl_cffi
+```
+
+其余功能（回测、UI、报告生成）仅需 Python 3.10+ 标准库。
+
+## 快速开始
+
+```powershell
+# 方式一：使用样例数据快速体验
 python -m aqt init-sample --data-dir data/sample
 python -m aqt backtest --data-dir data/sample --out-dir reports/demo --start 2023-07-03 --end 2024-12-31 --cash 1000000
 python -m aqt plan --data-dir data/sample --out-dir reports/demo --cash 1000000
+
+# 方式二：拉取真实 A 股每日数据（需安装 akshare）
+python -m aqt fetch --data-dir data/live           # 当日增量
+python -m aqt fetch --data-dir data/live --init    # 初始化 + CSI 300 历史基准
 python -m aqt ui
 ```
 
@@ -29,19 +45,45 @@ python -m aqt ui
 - `reports/demo/trades.csv`
 - `reports/demo/trade_plan_YYYYMMDD.csv`
 
-启动 UI 后在浏览器打开 `http://127.0.0.1:8765`。
+启动 UI 后在浏览器打开 `http://127.0.0.1:8765`，点击侧边栏"拉取每日数据"按钮即可在 Web 界面中完成数据获取。
+
+## 每日数据拉取
+
+`fetch` 命令从公开行情接口拉取当日 A 股全量数据，生成与样例数据相同格式的 CSV。
+
+```powershell
+# 增量拉取今日数据（追加到已有 CSV）
+python -m aqt fetch --data-dir data/live
+
+# 首次使用时初始化，同时下载 CSI 300 历史基准
+python -m aqt fetch --data-dir data/live --init
+```
+
+### 数据来源
+
+| 数据 | 来源 | 说明 |
+|------|------|------|
+| 股票列表 | akshare (`stock_info_a_code_name`) | 非东方财富数据源，获取全量 A 股代码和名称 |
+| 行情报价 (OHLCV/PE/PB) | 腾讯财经 (`qt.gtimg.cn`) | GBK 编码，每批 50 只，含涨跌停价自动计算 |
+| CSI 300 基准 | 东方财富 (`push2his.eastmoney.com`) | 多后端回退（curl_cffi → curl → requests） |
+
+### 注意事项
+
+- **数据积累**：策略需要至少 20 个交易日的历史数据才能产生有意义的信号。首次拉取后仅有一日数据，交易计划可能为空——持续每日拉取即可。
+- **网络环境**：如果系统配置了代理（如 Clash/V2Ray），请确保国内行情域名走直连，否则可能请求失败。东方财富接口对高频请求有 IP 限流。
+- **请求速率**：内置 60ms 批次间隔，单次全量拉取约 15 秒，对数据源压力可控。
+- **不是爬虫**：本工具访问的是公开 HTTP API（与浏览器访问东方财富/腾讯财经页面无异），使用标准 User-Agent，遵守速率限制，仅用于个人研究。不抓取需要登录的内容，不绕过任何访问控制。
 
 ## 数据格式
 
-`data/sample` 中包含四类 CSV：
+四类 CSV（`data/sample` 和 `data/live` 结构一致）：
 
-- `universe.csv`：股票基础信息
+- `universe.csv`：股票基础信息（代码、名称、板块）
 - `prices.csv`：日线行情、停牌、ST、涨跌停价
-- `fundamentals.csv`：估值和质量指标
-- `benchmark.csv`：基准指数
+- `fundamentals.csv`：估值指标（PE/PB）
+- `benchmark.csv`：CSI 300 基准收盘价
 
-你后续可以把真实数据源导出的 CSV 替换进去。字段定义见 `aqt/data.py` 中的加载逻辑。
-更详细的字段说明见 `docs/DATA_SCHEMA.md`。
+字段定义见 `aqt/data.py` 中的加载逻辑，更详细的字段说明见 `docs/DATA_SCHEMA.md`。
 
 ## 策略说明
 
@@ -62,13 +104,12 @@ python -m aqt ui
 
 ## 下一步建议
 
-第一版跑通后，建议按这个顺序扩展：
-
-1. 接入真实数据源：Tushare Pro、AKShare、券商导出的成交/持仓 CSV。
-2. 增加复权处理和指数成分历史。
+1. 增加复权处理和指数成分历史。
+2. 接入更多数据源：Tushare Pro、券商导出的成交/持仓 CSV。
 3. 加入更严格的未来函数检查。
 4. 增加行业中性、单行业上限、黑名单、最大回撤止损。
-5. 只在合规确认后，再考虑券商官方接口和自动化执行。
+5. 短线/波段交易策略（均线交叉、通道突破等）。
+6. 只在合规确认后，再考虑券商官方接口和自动化执行。
 
 ## 测试
 
