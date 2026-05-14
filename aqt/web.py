@@ -208,6 +208,38 @@ def get_quotes_payload(symbols_str: str) -> dict:
     return {"ok": True, "quotes": quotes}
 
 
+def _aggregate_bars(bars: list, period: str) -> list[dict]:
+    """Aggregate daily Bar objects into weekly or monthly OHLCV dicts."""
+    if period not in ("1w", "1M"):
+        return [
+            {"date": b.date.isoformat(), "open": b.open, "close": b.close,
+             "low": b.low, "high": b.high, "volume": b.volume}
+            for b in bars
+        ]
+
+    from collections import defaultdict
+    groups: dict[str, list] = defaultdict(list)
+    for b in bars:
+        if period == "1w":
+            key = b.date.strftime("%G-W%V")
+        else:
+            key = b.date.strftime("%Y-%m")
+        groups[key].append(b)
+
+    result = []
+    for key in sorted(groups):
+        group = groups[key]
+        result.append({
+            "date": group[-1].date.isoformat(),
+            "open": group[0].open,
+            "close": group[-1].close,
+            "high": max(b.high for b in group),
+            "low": min(b.low for b in group),
+            "volume": sum(b.volume for b in group),
+        })
+    return result
+
+
 def get_kline_payload(query: dict[str, list[str]]) -> dict:
     from .math_utils import sma as _sma
 
@@ -216,6 +248,7 @@ def get_kline_payload(query: dict[str, list[str]]) -> dict:
         return {"ok": False, "error": "Invalid symbol"}
     data_dir = _safe_path(_first(query, "data_dir") or "data/live")
     days = min(int(_first(query, "days") or "120"), 500)
+    period = _first(query, "period") or "1d"
 
     store = _get_store(data_dir)
     bars = store.bars_until(symbol, store.latest_date(), days)
@@ -225,19 +258,16 @@ def get_kline_payload(query: dict[str, list[str]]) -> dict:
     sec = store.universe.get(symbol)
     name = sec.name if sec else ""
 
-    closes = [b.close for b in bars]
-    kline = [
-        {"date": b.date.isoformat(), "open": b.open, "close": b.close,
-         "low": b.low, "high": b.high, "volume": b.volume}
-        for b in bars
-    ]
+    kline = _aggregate_bars(bars, period)
+    closes = [b["close"] for b in kline]
 
-    def _ma(period: int) -> list[float | None]:
-        vals = _sma(closes, period)
+    def _ma(p: int) -> list[float | None]:
+        vals = _sma(closes, p)
         return [None] * (len(closes) - len(vals)) + vals
 
     return {
         "ok": True, "symbol": symbol, "name": name, "kline": kline,
+        "period": period,
         "ma5": _ma(5), "ma10": _ma(10), "ma20": _ma(20), "ma60": _ma(60),
     }
 

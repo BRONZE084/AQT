@@ -13,6 +13,7 @@ const state = {
   klineSymbol: null,
   klineData: null,
   klineDays: 120,
+  klinePeriod: "1d",
   riskScores: {},
   marketOpen: false,
   pollingTimer: null,
@@ -96,6 +97,16 @@ document.querySelectorAll(".chart-toggle .tab").forEach((button) => {
       b.classList.toggle("active", b.dataset.chart === state.chartMode)
     );
     renderChartMode();
+  });
+});
+
+document.querySelectorAll(".period-toggle .tab").forEach((button) => {
+  button.addEventListener("click", () => {
+    state.klinePeriod = button.dataset.period;
+    document.querySelectorAll(".period-toggle .tab").forEach((b) =>
+      b.classList.toggle("active", b.dataset.period === state.klinePeriod)
+    );
+    if (state.klineSymbol) loadKline(state.klineSymbol);
   });
 });
 
@@ -536,16 +547,19 @@ function initKlineChart() {
   klineChart = echarts.init(dom);
 }
 
+const periodLabels = { "1d": "日K", "1w": "周K", "1M": "月K" };
+
 async function loadKline(symbol) {
   const values = formValues();
   try {
     const payload = await apiGet(
-      `/api/kline?symbol=${symbol}&days=${state.klineDays}&data_dir=${encodeURIComponent(values.data_dir)}`
+      `/api/kline?symbol=${symbol}&days=${state.klineDays}&period=${state.klinePeriod}&data_dir=${encodeURIComponent(values.data_dir)}`
     );
     state.klineData = payload;
     state.klineSymbol = symbol;
+    const label = periodLabels[state.klinePeriod] || "日K";
     document.querySelector("#klineSymbolLabel").textContent =
-      (payload.name ? payload.name + " — " : "") + `${state.klineDays}日K线`;
+      (payload.name ? payload.name + " — " : "") + `${payload.kline.length}根${label}线`;
     renderKlineChart();
     fetchRiskAssessment(symbol);
   } catch (e) {
@@ -616,7 +630,8 @@ function updateKlineOverlay() {
   const q = state.quotes[symbol];
   const risk = state.riskScores[symbol];
   if (!q && !risk) return;
-  let html = (q ? q.name || symbol : symbol) + " — " + state.klineDays + "日K线";
+  const pLabel = periodLabels[state.klinePeriod] || "日K";
+  let html = (q ? q.name || symbol : symbol) + " — " + pLabel + "线";
   if (q) html += ` | 现价: ${q.close.toFixed(2)} (${q.change_pct >= 0 ? "+" : ""}${q.change_pct.toFixed(2)}%)`;
   if (risk) {
     html += ` | 风险: ${risk.risk_level} (${(risk.risk_score * 100).toFixed(0)})`;

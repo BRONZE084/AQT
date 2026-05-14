@@ -654,6 +654,18 @@ td {
   gap: 6px;
 }
 
+.period-toggle {
+  display: flex;
+  gap: 3px;
+}
+
+.period-toggle .tab {
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: 12px;
+  border-radius: 5px;
+}
+
 .symbol-search {
   width: 130px;
   min-height: 34px;

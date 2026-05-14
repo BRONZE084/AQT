@@ -206,6 +206,11 @@
                   <button class="tab" data-chart="equity" type="button">净值曲线</button>
                 </div>
                 <div class="kline-controls" id="klineControls">
+                  <div class="period-toggle" id="periodToggle">
+                    <button class="tab active" data-period="1d" type="button">日K</button>
+                    <button class="tab" data-period="1w" type="button">周K</button>
+                    <button class="tab" data-period="1M" type="button">月K</button>
+                  </div>
                   <input id="symbolSearch" type="text" class="symbol-search"
                          placeholder="输入代码 如 600000" maxlength="6"
                          autocomplete="off" />
