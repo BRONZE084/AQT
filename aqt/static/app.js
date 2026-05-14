@@ -38,6 +38,7 @@ const columns = {
 };
 
 document.querySelector("#initSampleButton").addEventListener("click", () => runInitSample());
+document.querySelector("#fetchDataButton").addEventListener("click", () => runFetch());
 document.querySelector("#runBacktestButton").addEventListener("click", () => runBacktest());
 document.querySelector("#runPlanButton").addEventListener("click", () => runPlan());
 document.querySelector("#refreshButton").addEventListener("click", () => loadReport());
@@ -138,6 +139,19 @@ async function runInitSample() {
     });
     await loadStatus();
     showToast("样例数据已生成");
+  });
+}
+
+async function runFetch() {
+  const values = formValues();
+  await withBusy("正在拉取每日数据...", async () => {
+    const payload = await apiPost("/api/fetch", {
+      data_dir: values.data_dir,
+    });
+    state.files = payload.files || state.files;
+    renderFiles();
+    await loadStatus();
+    showToast(`数据已拉取：${payload.trade_date}`);
   });
 }
 

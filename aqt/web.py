@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .backtest import BacktestConfig, Backtester, save_backtest_result
 from .data import DataStore, generate_sample_data, parse_date
+from .fetcher import fetch_daily
 from .planner import PlanConfig, generate_trade_plan, load_positions
 from .strategies import STRATEGY_REGISTRY
 from .strategy import MultiFactorConfig, MultiFactorStrategy
@@ -104,6 +105,17 @@ def run_plan_job(payload: dict) -> dict:
     }
 
 
+def run_fetch_job(payload: dict) -> dict:
+    data_dir = _safe_path(payload.get("data_dir") or "data/live")
+    trade_date = fetch_daily(data_dir)
+    return {
+        "ok": True,
+        "message": f"Data fetched for {trade_date}",
+        "trade_date": trade_date,
+        "files": report_files(data_dir),
+    }
+
+
 def read_report_payload(out_dir_value: str | None = None) -> dict:
     out_dir = _safe_path(out_dir_value or "reports/demo")
     summary_path = out_dir / "summary.json"
@@ -174,6 +186,7 @@ class AQTRequestHandler(BaseHTTPRequestHandler):
             "/api/init-sample": init_sample_job,
             "/api/backtest": run_backtest_job,
             "/api/plan": run_plan_job,
+            "/api/fetch": run_fetch_job,
         }
         parsed = urlparse(self.path)
         job = routes.get(parsed.path)

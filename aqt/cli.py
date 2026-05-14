@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .backtest import BacktestConfig, Backtester, save_backtest_result
 from .data import DataStore, generate_sample_data, parse_date
+from .fetcher import fetch_daily, fetch_init
 from .planner import PlanConfig, generate_trade_plan, load_positions, save_positions_template
 from .strategies import STRATEGY_REGISTRY
 from .strategy import MultiFactorConfig, MultiFactorStrategy
@@ -69,6 +70,10 @@ def main() -> None:
     template_parser = subparsers.add_parser("positions-template", help="Create a positions CSV template.")
     template_parser.add_argument("--path", default="data/positions_template.csv")
 
+    fetch_parser = subparsers.add_parser("fetch", help="Fetch latest A-share daily data from EastMoney.")
+    fetch_parser.add_argument("--data-dir", default="data/live", help="Target data directory.")
+    fetch_parser.add_argument("--init", action="store_true", help="Initial fetch with CSI 300 history (otherwise incremental).")
+
     ui_parser = subparsers.add_parser("ui", help="Start the local browser UI.")
     ui_parser.add_argument("--host", default="127.0.0.1")
     ui_parser.add_argument("--port", type=int, default=8765)
@@ -86,6 +91,13 @@ def main() -> None:
     if args.command == "positions-template":
         save_positions_template(args.path)
         print(f"Positions template written to {Path(args.path).resolve()}")
+        return
+
+    if args.command == "fetch":
+        if args.init:
+            fetch_init(args.data_dir)
+        else:
+            fetch_daily(args.data_dir)
         return
 
     if args.command == "ui":
