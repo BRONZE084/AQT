@@ -9,3 +9,7 @@ data/*
 !data/
 !data/positions_template.csv
 reports/
+build/
+dist/
+*.pyc
+*.pyo

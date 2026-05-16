@@ -48,6 +48,26 @@ python -m aqt ui
 
 启动 UI 后在浏览器打开 `http://127.0.0.1:8765`。
 
+## 打包为 Windows 应用
+
+将 AQT 打包为独立 `.exe` 文件，无需安装 Python 即可运行。
+
+```powershell
+# 安装打包工具
+python -m pip install pyinstaller
+
+# 一键构建
+python -m PyInstaller aqt.spec --noconfirm
+```
+
+构建完成后：
+- `dist/AQT.exe` — 独立可执行文件（约 35 MB，可单独分发）
+- `dist/AQT/` — 完整运行目录（含所有依赖）
+
+直接双击 `AQT.exe` 即可启动，自动打开浏览器进入行情看板。
+
+> **注意**：打包后 ECharts 使用本地副本，无需网络即可加载 K 线图。但拉取实时数据仍需访问腾讯/东方财富 API，需要网络连接。
+
 ## Web UI 实时行情看板
 
 启动 `python -m aqt ui` 后，浏览器界面提供以下实时功能：
