@@ -865,3 +865,55 @@ td {
     flex-wrap: wrap;
   }
 }
+
+/* ── Optimize section ── */
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+.optimize-section {
+  border-left: 3px solid var(--primary);
+  padding-left: 12px;
+  margin-top: 4px;
+}
+
+.optimize-section label {
+  font-size: 12px;
+}
+
+.optimize-section input,
+.optimize-section select {
+  font-size: 12px;
+}
+
+.optimize-header {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+
+.opt-params {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--primary);
+}
+
+.positive {
+  color: #c14d32;
+  font-weight: 600;
+}
+
+.negative {
+  color: #176b5b;
+  font-weight: 600;
+}

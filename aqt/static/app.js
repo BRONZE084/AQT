@@ -17,6 +17,8 @@ const state = {
   riskScores: {},
   marketOpen: false,
   pollingTimer: null,
+  optimizeResults: [],
+  optimizeMetric: null,
 };
 
 let klineChart = null;
@@ -59,6 +61,14 @@ const columns = {
     ["risk_score", "风险分"],
     ["risk_level", "风险等级"],
     ["suitable", "适合买入"],
+  ],
+  optimize: [
+    ["rank", "排名"],
+    ["params", "参数"],
+    ["total_return", "总收益"],
+    ["annual_return", "年化收益"],
+    ["max_drawdown", "最大回撤"],
+    ["sharpe_like", "Sharpe"],
   ],
 };
 
@@ -110,6 +120,16 @@ document.querySelectorAll(".period-toggle .tab").forEach((button) => {
   });
 });
 
+const optimizeCheckbox = document.querySelector("#optimizeCheckbox");
+const optimizeSection = document.querySelector("#optimizeSection");
+if (optimizeCheckbox && optimizeSection) {
+  optimizeCheckbox.addEventListener("change", () => {
+    optimizeSection.style.display = optimizeCheckbox.checked ? "" : "none";
+    document.querySelector("#runBacktestButton").textContent =
+      optimizeCheckbox.checked ? "参数扫描" : "运行回测";
+  });
+}
+
 window.addEventListener("resize", () => {
   if (state.chartMode === "equity") drawChart();
   if (klineChart) klineChart.resize();
@@ -144,6 +164,8 @@ function formValues() {
     rebalance_freq: values.rebalance_freq,
     stop_loss: Number(values.stop_loss),
     take_profit: Number(values.take_profit),
+    max_per_industry: Number(values.max_per_industry),
+    blacklist: values.blacklist,
     sample_start: values.sample_start,
     sample_end: values.sample_end,
   };
@@ -237,6 +259,18 @@ async function runFetch() {
 
 async function runBacktest() {
   const values = formValues();
+  const isOptimize = optimizeCheckbox && optimizeCheckbox.checked;
+  if (isOptimize) {
+    await withBusy("正在参数扫描...", async () => {
+      const payload = await apiPost("/api/optimize", values);
+      state.optimizeResults = payload.results || [];
+      state.optimizeMetric = payload.metric || null;
+      state.activeTab = "optimize";
+      renderAll();
+      showToast(`参数扫描完成 — ${state.optimizeResults.length} 组结果`);
+    });
+    return;
+  }
   await withBusy("正在运行回测...", async () => {
     const payload = await apiPost("/api/backtest", values);
     applyPayload(payload);
@@ -797,6 +831,33 @@ function renderWatchlistTab() {
 
 // ── Tabs ──
 
+function renderOptimizeTab() {
+  const content = document.querySelector("#tabContent");
+  if (!state.optimizeResults || !state.optimizeResults.length) {
+    content.innerHTML = '<div class="empty-state">勾选"参数扫描"后运行回测查看优化结果</div>';
+    return;
+  }
+  const metricLabel = state.optimizeMetric || "sharpe_like";
+  let html = `<div class="optimize-header">排名指标: ${metricLabel} &mdash; 共 ${state.optimizeResults.length} 组结果</div>`;
+  html += '<table class="data-table"><thead><tr>';
+  html += '<th>排名</th><th>参数</th><th>总收益</th><th>年化收益</th><th>最大回撤</th><th>Sharpe</th>';
+  html += '</tr></thead><tbody>';
+  for (const r of state.optimizeResults) {
+    const m = r.metrics || {};
+    const paramsStr = Object.entries(r.params || {}).map(([k, v]) => `${k}=${v}`).join(", ");
+    html += '<tr>';
+    html += `<td><strong>#${r.rank}</strong></td>`;
+    html += `<td class="opt-params">${paramsStr}</td>`;
+    html += `<td class="${(m.total_return || 0) >= 0 ? 'positive' : 'negative'}">${fmtPct(m.total_return)}</td>`;
+    html += `<td class="${(m.annual_return || 0) >= 0 ? 'positive' : 'negative'}">${fmtPct(m.annual_return)}</td>`;
+    html += `<td class="negative">${fmtPct(m.max_drawdown)}</td>`;
+    html += `<td>${(m.sharpe_like || 0).toFixed(2)}</td>`;
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  content.innerHTML = html;
+}
+
 function renderTabs() {
   document.querySelectorAll(".tab").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === state.activeTab);
@@ -808,6 +869,10 @@ function renderTabs() {
   }
   if (state.activeTab === "watchlist") {
     renderWatchlistTab();
+    return;
+  }
+  if (state.activeTab === "optimize") {
+    renderOptimizeTab();
     return;
   }
   const rows = state.activeTab === "trades" ? state.trades : state.plan;
@@ -877,6 +942,11 @@ function setStatus(selector, ready, text) {
   element.textContent = text;
   element.classList.toggle("ready", ready);
   element.classList.toggle("pending", !ready);
+}
+
+function fmtPct(value) {
+  if (value == null) return "--";
+  return (value * 100).toFixed(2) + "%";
 }
 
 function setButtonsDisabled(disabled) {

@@ -6,7 +6,8 @@ from pathlib import Path
 
 from .backtest import BacktestConfig, Backtester, save_backtest_result
 from .data import DataStore, generate_sample_data, parse_date
-from .fetcher import fetch_daily, fetch_init
+from .fetcher import fetch_daily, fetch_history, fetch_init
+from .optimizer import GridSearch
 from .planner import PlanConfig, generate_trade_plan, load_positions, save_positions_template
 from .strategies import STRATEGY_REGISTRY
 from .strategy import MultiFactorConfig, MultiFactorStrategy
@@ -18,7 +19,15 @@ def _build_strategy(name: str, args: argparse.Namespace):
     config_cls = entry["config_cls"]
     strategy_cls = entry["cls"]
     if name == "multi_factor":
-        config = config_cls(top_n=args.top_n, min_amount=args.min_amount)
+        blacklist = tuple(
+            s.strip() for s in (getattr(args, "blacklist", "") or "").split(",") if s.strip()
+        )
+        config = config_cls(
+            top_n=args.top_n,
+            min_amount=args.min_amount,
+            max_per_industry=getattr(args, "max_per_industry", 0) or 0,
+            blacklist=blacklist,
+        )
     else:
         config = config_cls()
     return strategy_cls(config)
@@ -52,6 +61,20 @@ def main() -> None:
     backtest_parser.add_argument(
         "--strategy", choices=list(STRATEGY_REGISTRY), default="multi_factor"
     )
+    backtest_parser.add_argument("--max-per-industry", type=int, default=0, metavar="N",
+                                 help="Max stocks per industry (0=no limit).")
+    backtest_parser.add_argument("--blacklist", default="",
+                                 help="Comma-separated symbols to exclude, e.g. 600008,000002")
+    backtest_parser.add_argument("--optimize", action="store_true",
+                                 help="Run grid search over parameter combinations.")
+    backtest_parser.add_argument("--opt-top-n", default="", metavar="VALS",
+                                 help="Comma-separated top_n values, e.g. 5,8,10,15")
+    backtest_parser.add_argument("--opt-lookback", default="", metavar="VALS",
+                                 help="Comma-separated lookback values, e.g. 30,60,90,120")
+    backtest_parser.add_argument("--opt-metric", choices=["total_return", "sharpe_like", "max_drawdown"],
+                                 default="sharpe_like")
+    backtest_parser.add_argument("--opt-results", type=int, default=10, metavar="N",
+                                 help="Show top N results (default 10).")
 
     plan_parser = subparsers.add_parser("plan", help="Generate a manual trade plan from latest data.")
     plan_parser.add_argument("--data-dir", default="data/sample")
@@ -66,13 +89,21 @@ def main() -> None:
     plan_parser.add_argument(
         "--strategy", choices=list(STRATEGY_REGISTRY), default="multi_factor"
     )
+    plan_parser.add_argument("--max-per-industry", type=int, default=0, metavar="N",
+                             help="Max stocks per industry (0=no limit).")
+    plan_parser.add_argument("--blacklist", default="",
+                             help="Comma-separated symbols to exclude, e.g. 600008,000002")
 
     template_parser = subparsers.add_parser("positions-template", help="Create a positions CSV template.")
     template_parser.add_argument("--path", default="data/positions_template.csv")
 
     fetch_parser = subparsers.add_parser("fetch", help="Fetch latest A-share daily data from EastMoney.")
     fetch_parser.add_argument("--data-dir", default="data/live", help="Target data directory.")
-    fetch_parser.add_argument("--init", action="store_true", help="Initial fetch with CSI 300 history (otherwise incremental).")
+    fetch_parser.add_argument("--init", action="store_true", help="First-time setup: spot + history + benchmark.")
+    fetch_parser.add_argument("--days", type=int, default=60, metavar="N", help="History days for --init (default 60).")
+    fetch_parser.add_argument("--history", type=int, metavar="N", help="Backfill N days of K-line for all symbols (no spot fetch).")
+    fetch_parser.add_argument("--fqt", default="1", choices=["0", "1", "2"],
+                              help="Adjustment mode: 0=raw, 1=forward (default), 2=backward.")
 
     ui_parser = subparsers.add_parser("ui", help="Start the local browser UI.")
     ui_parser.add_argument("--host", default="127.0.0.1")
@@ -95,7 +126,9 @@ def main() -> None:
 
     if args.command == "fetch":
         if args.init:
-            fetch_init(args.data_dir)
+            fetch_init(args.data_dir, history_days=args.days, fqt=args.fqt)
+        elif args.history:
+            fetch_history(args.data_dir, days=args.history)
         else:
             fetch_daily(args.data_dir)
         return
@@ -106,8 +139,7 @@ def main() -> None:
 
     if args.command == "backtest":
         store = DataStore.load(args.data_dir)
-        strategy = _build_strategy(args.strategy, args)
-        config = BacktestConfig(
+        base_config = BacktestConfig(
             start=parse_date(args.start),
             end=parse_date(args.end),
             initial_cash=args.cash,
@@ -117,11 +149,29 @@ def main() -> None:
             stop_loss_pct=args.stop_loss,
             take_profit_pct=args.take_profit,
         )
-        result = Backtester(store, strategy, config).run()
-        save_backtest_result(result, args.out_dir)
-        print(f"Backtest report written to {Path(args.out_dir).resolve()}")
-        print(f"Total return: {result.summary['total_return']:.2%}")
-        print(f"Max drawdown: {result.summary['max_drawdown']:.2%}")
+
+        if args.optimize:
+            # Grid search mode
+            param_grid: dict[str, list] = {}
+            if args.opt_top_n:
+                param_grid["top_n"] = [int(x.strip()) for x in args.opt_top_n.split(",") if x.strip()]
+            if args.opt_lookback:
+                param_grid["lookback"] = [int(x.strip()) for x in args.opt_lookback.split(",") if x.strip()]
+            if not param_grid:
+                param_grid = {"top_n": [5, 8, 10, 15], "lookback": [30, 60, 90, 120]}
+
+            gs = GridSearch(store, args.strategy, param_grid, base_config, metric=args.opt_metric)
+            results = gs.run(top_n=args.opt_results)
+            print()
+            print(f"Top {min(args.opt_results, len(results))} results (metric={args.opt_metric}):")
+            GridSearch.print_table(results, top_n=args.opt_results)
+        else:
+            strategy = _build_strategy(args.strategy, args)
+            result = Backtester(store, strategy, base_config).run()
+            save_backtest_result(result, args.out_dir)
+            print(f"Backtest report written to {Path(args.out_dir).resolve()}")
+            print(f"Total return: {result.summary['total_return']:.2%}")
+            print(f"Max drawdown: {result.summary['max_drawdown']:.2%}")
         return
 
     if args.command == "plan":

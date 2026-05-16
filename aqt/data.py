@@ -50,25 +50,40 @@ class DataStore:
         self.fundamentals: dict[str, list[Fundamental]] = defaultdict(list)
         self.benchmark: dict[date, float] = {}
         self.dates: list[date] = []
+        self.industries: dict[str, str] = {}
 
     @classmethod
     def load(cls, data_dir: str | Path) -> "DataStore":
         store = cls(Path(data_dir))
+        store._load_industry()
         store._load_universe()
         store._load_prices()
         store._load_fundamentals()
         store._load_benchmark()
         return store
 
+    def _load_industry(self) -> None:
+        path = self.data_dir / "industry.csv"
+        if not path.exists():
+            return
+        with path.open("r", newline="", encoding="utf-8") as fh:
+            for row in csv.DictReader(fh):
+                symbol = row.get("symbol", "").zfill(6)
+                if symbol:
+                    self.industries[symbol] = row.get("industry", "")
+
     def _load_universe(self) -> None:
         path = self.data_dir / "universe.csv"
         with path.open("r", newline="", encoding="utf-8") as fh:
             for row in csv.DictReader(fh):
+                symbol = row["symbol"]
+                # Use industry from universe.csv; fall back to industry.csv
+                industry = row.get("industry", "") or self.industries.get(symbol, "")
                 security = Security(
-                    symbol=row["symbol"],
+                    symbol=symbol,
                     name=row["name"],
                     board=row["board"],
-                    industry=row["industry"],
+                    industry=industry,
                     list_date=parse_date(row["list_date"]),
                 )
                 self.universe[security.symbol] = security

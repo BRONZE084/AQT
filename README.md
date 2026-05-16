@@ -34,7 +34,9 @@ python -m aqt plan --data-dir data/sample --out-dir reports/demo --cash 1000000
 
 # 方式二：拉取真实 A 股每日数据（需安装 akshare）
 python -m aqt fetch --data-dir data/live           # 当日增量
-python -m aqt fetch --data-dir data/live --init    # 初始化 + CSI 300 历史基准
+python -m aqt fetch --data-dir data/live --init    # 初始化：当日行情 + 60 天历史 + 基准
+python -m aqt fetch --data-dir data/live --history 120  # 单独补充 120 天历史 K 线
+python -m aqt fetch --data-dir data/live --init --days 120  # 初始化并拉取 120 天历史
 python -m aqt ui
 ```
 
@@ -104,8 +106,14 @@ python -m PyInstaller aqt.spec --noconfirm
 # 增量拉取今日数据（追加到已有 CSV）
 python -m aqt fetch --data-dir data/live
 
-# 首次使用时初始化，同时下载 CSI 300 历史基准
+# 首次使用时初始化：当日行情 + 60 天历史 K 线 + CSI 300 基准（默认 60 天）
 python -m aqt fetch --data-dir data/live --init
+
+# 自定义历史天数
+python -m aqt fetch --data-dir data/live --init --days 120
+
+# 单独补充历史 K 线（不拉取当日行情）
+python -m aqt fetch --data-dir data/live --history 90
 ```
 
 ### 数据来源
@@ -114,11 +122,12 @@ python -m aqt fetch --data-dir data/live --init
 |------|------|------|
 | 股票列表 | akshare (`stock_info_a_code_name`) | 非东方财富数据源，获取全量 A 股代码和名称 |
 | 行情报价 (OHLCV/PE/PB) | 腾讯财经 (`qt.gtimg.cn`) | GBK 编码，每批 50 只，含涨跌停价自动计算 |
+| 历史 K 线 | 东方财富 (`push2his.eastmoney.com`) | 前复权日线，多线程并发（8 线程），自动跳过已有日期 |
 | CSI 300 基准 | 东方财富 (`push2his.eastmoney.com`) | 多后端回退（curl_cffi → curl → requests） |
 
 ### 注意事项
 
-- **数据积累**：策略需要至少 20 个交易日的历史数据才能产生有意义的信号。首次拉取后仅有一日数据，交易计划可能为空——持续每日拉取即可。
+- **数据积累**：策略需要至少 20 个交易日的历史数据才能产生有意义的信号。首次拉取建议使用 `--init`（自动回填 60 天历史），后续每日 `fetch` 增量追加。如果历史数据不足，可随时用 `--history N` 补充。
 - **网络环境**：如果系统配置了代理（如 Clash/V2Ray），请确保国内行情域名走直连，否则可能请求失败。东方财富接口对高频请求有 IP 限流。
 - **请求速率**：内置 60ms 批次间隔，单次全量拉取约 15 秒，对数据源压力可控。
 - **不是爬虫**：本工具访问的是公开 HTTP API（与浏览器访问东方财富/腾讯财经页面无异），使用标准 User-Agent，遵守速率限制，仅用于个人研究。不抓取需要登录的内容，不绕过任何访问控制。
@@ -133,6 +142,8 @@ python -m aqt fetch --data-dir data/live --init
 - `benchmark.csv`：CSI 300 基准收盘价
 
 字段定义见 `aqt/data.py` 中的加载逻辑，更详细的字段说明见 `docs/DATA_SCHEMA.md`。
+
+> **复权说明**：所有 OHLCV 价格统一使用**前复权**（fqt=1），数据来源为东方财富日K线接口。PE/PB 数据来自腾讯财经。`fetch --init` 初始化时自动回填 60 天前复权历史；已有旧数据可通过 `fetch --history 120` 覆写为前复权。
 
 ## 策略说明
 
@@ -149,16 +160,40 @@ python -m aqt fetch --data-dir data/live --init
 - 剔除停牌
 - 剔除上市时间不足的股票
 - 剔除成交额过低的股票
+- 剔除黑名单股票（`--blacklist`）
 - 买入时避开涨停，卖出时避开跌停
+
+### 风控模块
+
+多因子策略支持行业中性约束和黑名单：
+
+```powershell
+# 每行业最多 2 只；排除指定股票
+python -m aqt backtest --data-dir data/live --start 2024-01-01 --end 2025-01-01 \
+    --max-per-industry 2 --blacklist 600008,000002
+```
+
+行业分类数据通过 `fetch --init` 自动从 akshare 拉取并保存为 `industry.csv`，后续回测自动加载。
+
+### 参数扫描
+
+通过网格搜索自动寻找最优策略参数组合：
+
+```powershell
+# 枚举 top_n ∈ {5,8,10,15} × lookback ∈ {30,60,90,120}，按 Sharpe 排序
+python -m aqt backtest --data-dir data/live --start 2024-01-01 --end 2025-01-01 \
+    --optimize --opt-top-n 5,8,10,15 --opt-lookback 30,60,90,120 --opt-metric sharpe_like
+```
+
+Web UI 中勾选"参数扫描"复选框，设置枚举范围后点击运行即可在"优化结果"Tab 查看排名。
 
 ## 下一步建议
 
-1. 增加复权处理和指数成分历史。
-2. 接入更多数据源：Tushare Pro、券商导出的成交/持仓 CSV。
-3. 加入更严格的未来函数检查。
-4. 增加行业中性、单行业上限、黑名单等风控模块。
-5. 实盘交易计划自动校验（资金不足、持仓冲突等）。
-6. 只在合规确认后，再考虑券商官方接口和自动化执行。
+1. 接入更多数据源：Tushare Pro、券商导出的成交/持仓 CSV、ROE 真实数据。
+2. 加入更严格的未来函数检查（幸存者偏差、前视偏差）。
+3. 多资产回测和仓位优化（Kelly、风险平价）。
+4. 实盘交易计划自动校验（资金不足、持仓冲突等）。
+5. 只在合规确认后，再考虑券商官方接口和自动化执行。
 
 ## 测试
 

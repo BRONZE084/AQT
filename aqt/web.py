@@ -142,8 +142,59 @@ def run_plan_job(payload: dict) -> dict:
     }
 
 
+def run_optimize_job(payload: dict) -> dict:
+    from .optimizer import GridSearch
+
+    data_dir = _safe_path(payload.get("data_dir") or "data/live")
+    store = _get_store(data_dir)
+    strategy_name = payload.get("strategy") or "multi_factor"
+    base_config = BacktestConfig(
+        start=parse_date(payload.get("start") or "2023-07-03"),
+        end=parse_date(payload.get("end") or "2024-12-31"),
+        initial_cash=_float(payload.get("cash"), 1_000_000.0),
+        max_weight=_float(payload.get("max_weight"), 0.15),
+        cash_buffer=_float(payload.get("cash_buffer"), 0.02),
+        rebalance_freq=payload.get("rebalance_freq") or "monthly",
+        stop_loss_pct=_float(payload.get("stop_loss"), 0.0),
+        take_profit_pct=_float(payload.get("take_profit"), 0.0),
+    )
+    metric = payload.get("metric") or "sharpe_like"
+
+    param_grid: dict[str, list] = {}
+    opt_top_n = payload.get("opt_top_n") or ""
+    if opt_top_n:
+        param_grid["top_n"] = [int(x.strip()) for x in str(opt_top_n).split(",") if x.strip()]
+    opt_lookback = payload.get("opt_lookback") or ""
+    if opt_lookback:
+        param_grid["lookback"] = [int(x.strip()) for x in str(opt_lookback).split(",") if x.strip()]
+    if not param_grid:
+        param_grid = {"top_n": [5, 8, 10, 15], "lookback": [30, 60, 90, 120]}
+
+    top_n = int(payload.get("opt_results") or 10)
+    gs = GridSearch(store, strategy_name, param_grid, base_config, metric=metric)
+    results = gs.run(top_n=top_n)
+    rows = []
+    for r in results:
+        rows.append({
+            "rank": r.rank,
+            "params": r.params,
+            "metrics": {k: v for k, v in r.metrics.items() if isinstance(v, (int, float))},
+        })
+    return {"ok": True, "metric": metric, "results": rows}
+
+
 def run_fetch_job(payload: dict) -> dict:
     data_dir = _safe_path(payload.get("data_dir") or "data/live")
+    if payload.get("init"):
+        from .fetcher import fetch_init
+        days = int(payload.get("history_days") or 60)
+        trade_date = fetch_init(data_dir, history_days=days)
+        return {"ok": True, "message": f"Initialized with {days}d history", "trade_date": trade_date, "files": report_files(data_dir)}
+    if payload.get("history"):
+        from .fetcher import fetch_history
+        days = int(payload.get("history") or 60)
+        count = fetch_history(data_dir, days=days)
+        return {"ok": True, "message": f"History: {count} rows for {days} days", "rows": count, "files": report_files(data_dir)}
     trade_date = fetch_daily(data_dir)
     return {
         "ok": True,
@@ -483,6 +534,7 @@ class AQTRequestHandler(BaseHTTPRequestHandler):
             "/api/init-sample": init_sample_job,
             "/api/backtest": run_backtest_job,
             "/api/plan": run_plan_job,
+            "/api/optimize": run_optimize_job,
             "/api/fetch": run_fetch_job,
             "/api/watchlist": handle_watchlist_post,
             "/api/risk-assessment": get_risk_payload,
@@ -587,9 +639,13 @@ def _strategy_from_payload(payload: dict):
     config_cls = entry["config_cls"]
     strategy_cls = entry["cls"]
     if name == "multi_factor":
+        blacklist_raw = payload.get("blacklist") or ""
+        blacklist = tuple(s.strip() for s in blacklist_raw.split(",") if s.strip())
         config = config_cls(
             top_n=int(payload.get("top_n") or 8),
             min_amount=_float(payload.get("min_amount"), 20_000_000.0),
+            max_per_industry=int(payload.get("max_per_industry") or 0),
+            blacklist=blacklist,
         )
     else:
         config = config_cls()

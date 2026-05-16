@@ -19,6 +19,8 @@ class MultiFactorConfig:
     volatility_weight: float = 0.25
     value_weight: float = 0.20
     quality_weight: float = 0.20
+    max_per_industry: int = 0       # 0 = no limit, N = max N stocks per industry
+    blacklist: tuple[str, ...] = ()  # symbols to always skip
 
 
 class Strategy(ABC):
@@ -40,6 +42,8 @@ class MultiFactorStrategy(Strategy):
         candidates: dict[str, dict[str, float]] = {}
 
         for symbol in store.symbols_as_of(as_of):
+            if symbol in cfg.blacklist:
+                continue
             security = store.universe[symbol]
             if (as_of - security.list_date).days < cfg.min_listed_days:
                 continue
@@ -100,5 +104,21 @@ class MultiFactorStrategy(Strategy):
                 )
             )
 
-        return sorted(signals, key=lambda item: item.score, reverse=True)[: cfg.top_n]
+        sorted_signals = sorted(signals, key=lambda item: item.score, reverse=True)
+        if cfg.max_per_industry <= 0:
+            return sorted_signals[: cfg.top_n]
+
+        # Industry cap: pick top-N signals respecting per-industry limit
+        selected: list[Signal] = []
+        industry_counts: dict[str, int] = {}
+        for sig in sorted_signals:
+            sec = store.universe.get(sig.symbol)
+            ind = (sec.industry or "其他") if sec else "其他"
+            if industry_counts.get(ind, 0) >= cfg.max_per_industry:
+                continue
+            selected.append(sig)
+            industry_counts[ind] = industry_counts.get(ind, 0) + 1
+            if len(selected) >= cfg.top_n:
+                break
+        return selected
 

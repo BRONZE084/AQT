@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m unittest)",
+      "Bash(python -m aqt backtest --help)",
+      "Bash(python -c ' *)"
+    ]
+  }
+}
