@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, urlparse
 from .backtest import BacktestConfig, Backtester, save_backtest_result
 from .data import DataStore, generate_sample_data, parse_date
 from .fetcher import _tx_fetch_quotes, _tx_key, fetch_daily
-from .planner import PlanConfig, generate_trade_plan, load_positions
+from .planner import PlanConfig, generate_trade_plan, load_positions, save_positions_template
 from .strategies import STRATEGY_REGISTRY
 from .strategy import MultiFactorConfig, MultiFactorStrategy
 
@@ -202,6 +202,12 @@ def run_fetch_job(payload: dict) -> dict:
         "trade_date": trade_date,
         "files": report_files(data_dir),
     }
+
+
+def positions_template_job(payload: dict) -> dict:
+    path = Path(payload.get("path") or "data/positions_template.csv")
+    save_positions_template(path)
+    return {"ok": True, "path": str(path), "message": f"模板已生成: {path}"}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -536,6 +542,7 @@ class AQTRequestHandler(BaseHTTPRequestHandler):
             "/api/plan": run_plan_job,
             "/api/optimize": run_optimize_job,
             "/api/fetch": run_fetch_job,
+            "/api/positions-template": positions_template_job,
             "/api/watchlist": handle_watchlist_post,
             "/api/risk-assessment": get_risk_payload,
         }

@@ -12,7 +12,7 @@ const state = {
   watchlist: [],
   klineSymbol: null,
   klineData: null,
-  klineDays: 120,
+  klineDays: 60,
   klinePeriod: "1d",
   riskScores: {},
   marketOpen: false,
@@ -76,8 +76,26 @@ const columns = {
 
 document.querySelector("#initSampleButton").addEventListener("click", () => runInitSample());
 document.querySelector("#fetchDataButton").addEventListener("click", () => runFetch());
+document.querySelector("#fetchInitButton").addEventListener("click", () => runFetchInit());
+document.querySelector("#fetchHistoryButton").addEventListener("click", () => runFetchHistory());
+document.querySelector("#positionsTemplateButton").addEventListener("click", () => runPositionsTemplate());
 document.querySelector("#runBacktestButton").addEventListener("click", () => runBacktest());
 document.querySelector("#runPlanButton").addEventListener("click", () => runPlan());
+
+// Sync history days input <-> kline days input
+const historyDaysInput = document.querySelector("#historyDaysInput");
+const klineDaysInput = document.querySelector("#klineDaysInput");
+if (historyDaysInput && klineDaysInput) {
+  historyDaysInput.addEventListener("input", () => {
+    klineDaysInput.value = historyDaysInput.value;
+    state.klineDays = parseInt(historyDaysInput.value) || 60;
+  });
+  klineDaysInput.addEventListener("input", () => {
+    historyDaysInput.value = klineDaysInput.value;
+    state.klineDays = parseInt(klineDaysInput.value) || 60;
+    if (state.klineSymbol) loadKline(state.klineSymbol);
+  });
+}
 document.querySelector("#refreshButton").addEventListener("click", () => loadReport());
 document.querySelector("#searchButton").addEventListener("click", () => {
   const symbol = document.querySelector("#symbolSearch").value.trim();
@@ -164,8 +182,10 @@ function formValues() {
     rebalance_freq: values.rebalance_freq,
     stop_loss: Number(values.stop_loss),
     take_profit: Number(values.take_profit),
+    trailing_stop: Number(values.trailing_stop),
     max_per_industry: Number(values.max_per_industry),
     blacklist: values.blacklist,
+    as_of: values.plan_as_of || undefined,
     sample_start: values.sample_start,
     sample_end: values.sample_end,
   };
@@ -254,6 +274,53 @@ async function runFetch() {
     renderFiles();
     await loadStatus();
     showToast(`数据已拉取：${payload.trade_date}`);
+  });
+}
+
+async function runFetchInit() {
+  const values = formValues();
+  const days = parseInt(historyDaysInput?.value) || 60;
+  await withBusy(`正在初始化数据（${days}天历史）...`, async () => {
+    const payload = await apiPost("/api/fetch", {
+      data_dir: values.data_dir,
+      init: true,
+      history_days: days,
+    });
+    state.files = payload.files || state.files;
+    renderFiles();
+    await loadStatus();
+    showToast(`数据初始化完成：${payload.trade_date || payload.message}`);
+  });
+}
+
+async function runFetchHistory() {
+  const values = formValues();
+  const days = parseInt(historyDaysInput?.value) || 60;
+  await withBusy(`正在拉取 ${days} 天历史数据...`, async () => {
+    const payload = await apiPost("/api/fetch", {
+      data_dir: values.data_dir,
+      history: days,
+    });
+    state.files = payload.files || state.files;
+    renderFiles();
+    await loadStatus();
+    showToast(`历史数据已拉取：${payload.rows || payload.message}`);
+    // Reload K-line if a symbol is active
+    if (state.klineSymbol) {
+      state.klineDays = days;
+      klineDaysInput.value = days;
+      loadKline(state.klineSymbol);
+    }
+  });
+}
+
+async function runPositionsTemplate() {
+  const values = formValues();
+  await withBusy("正在生成持仓模板...", async () => {
+    const payload = await apiPost("/api/positions-template", {
+      path: (values.data_dir || "data/live") + "/positions_template.csv",
+    });
+    showToast(`持仓模板已生成：${payload.path}`);
   });
 }
 
@@ -585,6 +652,8 @@ const periodLabels = { "1d": "日K", "1w": "周K", "1M": "月K" };
 
 async function loadKline(symbol) {
   const values = formValues();
+  // Read latest days from input (synced with historyDaysInput)
+  if (klineDaysInput) state.klineDays = parseInt(klineDaysInput.value) || 60;
   try {
     const payload = await apiGet(
       `/api/kline?symbol=${symbol}&days=${state.klineDays}&period=${state.klinePeriod}&data_dir=${encodeURIComponent(values.data_dir)}`
@@ -684,7 +753,7 @@ async function fetchRiskAssessment(symbol) {
     const p = await apiPost("/api/risk-assessment", {
       symbol: symbol,
       data_dir: values.data_dir,
-      lookback: 60,
+      lookback: state.klineDays,
     });
     state.riskScores[symbol] = {
       risk_score: p.risk_score,
