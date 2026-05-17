@@ -25,19 +25,31 @@ WORKSPACE_ROOT = Path.cwd().resolve()
 STATIC_ROOT = Path(__file__).with_name("static")
 
 # DataStore cache to avoid reloading CSV on every kline/risk request
-_store_cache: dict[str, tuple[float, DataStore]] = {}
+_store_cache: dict[str, tuple[float, float, DataStore]] = {}
 _STORE_CACHE_TTL = 60.0
+
+
+def _store_mtime(data_dir: Path) -> float:
+    """Return the latest mtime among the key CSV files in the data directory."""
+    max_mtime = 0.0
+    for name in ("prices.csv", "universe.csv", "fundamentals.csv", "benchmark.csv"):
+        p = data_dir / name
+        if p.exists():
+            max_mtime = max(max_mtime, p.stat().st_mtime)
+    return max_mtime
 
 
 def _get_store(data_dir: str | Path) -> DataStore:
     key = str(_safe_path(data_dir))
     now = _time_module.time()
+    cur_mtime = _store_mtime(Path(key))
     if key in _store_cache:
-        ts, store = _store_cache[key]
-        if now - ts < _STORE_CACHE_TTL:
+        ts, mtime, store = _store_cache[key]
+        # Still fresh AND files haven't changed since last load
+        if now - ts < _STORE_CACHE_TTL and mtime == cur_mtime:
             return store
     store = DataStore.load(data_dir)
-    _store_cache[key] = (now, store)
+    _store_cache[key] = (now, cur_mtime, store)
     return store
 
 
@@ -80,6 +92,7 @@ def init_sample_job(payload: dict) -> dict:
     start = parse_date(payload.get("start") or "2022-01-04")
     end = parse_date(payload.get("end") or "2024-12-31")
     generate_sample_data(data_dir, start, end)
+
     return {
         "ok": True,
         "message": f"Sample data written to {data_dir}",
@@ -189,13 +202,16 @@ def run_fetch_job(payload: dict) -> dict:
         from .fetcher import fetch_init
         days = int(payload.get("history_days") or 60)
         trade_date = fetch_init(data_dir, history_days=days)
+    
         return {"ok": True, "message": f"Initialized with {days}d history", "trade_date": trade_date, "files": report_files(data_dir)}
     if payload.get("history"):
         from .fetcher import fetch_history
         days = int(payload.get("history") or 60)
         count = fetch_history(data_dir, days=days)
+    
         return {"ok": True, "message": f"History: {count} rows for {days} days", "rows": count, "files": report_files(data_dir)}
     trade_date = fetch_daily(data_dir)
+
     return {
         "ok": True,
         "message": f"Data fetched for {trade_date}",
@@ -327,6 +343,24 @@ def get_kline_payload(query: dict[str, list[str]]) -> dict:
         "period": period,
         "ma5": _ma(5), "ma10": _ma(10), "ma20": _ma(20), "ma60": _ma(60),
     }
+
+
+def get_symbols_payload(query: dict[str, list[str]]) -> dict:
+    data_dir = _safe_path(_first(query, "data_dir") or "data/live")
+    q = (_first(query, "q") or "").strip()
+    store = _get_store(data_dir)
+    items = [
+        {"symbol": sym, "name": sec.name, "board": sec.board}
+        for sym, sec in store.universe.items()
+    ]
+    if q:
+        q_lower = q.lower()
+        items = [
+            item for item in items
+            if q_lower in item["symbol"] or q_lower in item["name"].lower()
+        ]
+    # Return at most 50 results to avoid huge responses
+    return {"ok": True, "items": items[:50], "total": len(store.universe)}
 
 
 def get_watchlist_payload(query: dict[str, list[str]]) -> dict:
@@ -517,6 +551,10 @@ class AQTRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/report":
             query = parse_qs(parsed.query)
             self._send_json(HTTPStatus.OK, read_report_payload(_first(query, "out_dir")))
+            return
+        if parsed.path == "/api/symbols":
+            query = parse_qs(parsed.query)
+            self._send_json(HTTPStatus.OK, get_symbols_payload(query))
             return
         if parsed.path == "/api/market-index":
             self._send_json(HTTPStatus.OK, get_market_index_payload())

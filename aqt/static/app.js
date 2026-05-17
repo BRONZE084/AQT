@@ -98,17 +98,135 @@ if (historyDaysInput && klineDaysInput) {
 }
 document.querySelector("#refreshButton").addEventListener("click", () => loadReport());
 document.querySelector("#searchButton").addEventListener("click", () => {
-  const symbol = document.querySelector("#symbolSearch").value.trim();
-  if (symbol) loadKline(symbol);
-});
-document.querySelector("#symbolSearch").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") {
-    const symbol = e.target.value.trim();
-    if (symbol) loadKline(symbol);
-  }
+  const input = document.querySelector("#symbolSearch");
+  const q = input.value.trim();
+  if (q) searchOrLoadKline(q);
 });
 document.querySelector("#addWatchlistButton").addEventListener("click", () => {
   if (state.klineSymbol) addToWatchlist(state.klineSymbol);
+});
+
+// ── Stock search autocomplete ──
+
+const symbolSearch = document.querySelector("#symbolSearch");
+const suggestionsBox = document.querySelector("#symbolSuggestions");
+let searchResults = [];
+let searchHighlight = -1;
+
+function searchOrLoadKline(q) {
+  // If user typed something that matches a stock name, try to resolve it
+  closeSuggestions();
+  // Check if input is a pure 6-digit code
+  if (/^\d{6}$/.test(q)) {
+    loadKline(q);
+    return;
+  }
+  // Otherwise try to find exact name match in recent results, or search by code prefix
+  fetchAndSearch(q, true);
+}
+
+async function fetchAndSearch(q, loadIfOne) {
+  const values = formValues();
+  const url = `/api/symbols?q=${encodeURIComponent(q)}&data_dir=${encodeURIComponent(values.data_dir)}`;
+  try {
+    const payload = await apiGet(url);
+    searchResults = payload.items || [];
+    searchHighlight = -1;
+    if (searchResults.length === 0) {
+      closeSuggestions();
+      showToast("未找到匹配的股票");
+      return;
+    }
+    if (loadIfOne && searchResults.length === 1) {
+      loadKline(searchResults[0].symbol);
+      return;
+    }
+    renderSuggestions();
+  } catch (e) {
+    closeSuggestions();
+    showToast("搜索失败: " + e.message);
+  }
+}
+
+function renderSuggestions() {
+  if (!suggestionsBox) return;
+  suggestionsBox.innerHTML = searchResults
+    .map(
+      (item, i) =>
+        `<div class="suggestion-item${i === searchHighlight ? " highlighted" : ""}"
+             data-symbol="${item.symbol}" data-index="${i}">
+           <span class="suggestion-code">${item.symbol}</span>
+           <span class="suggestion-name">${item.name}</span>
+           <span class="suggestion-board">${item.board}</span>
+         </div>`
+    )
+    .join("");
+  suggestionsBox.style.display = "block";
+  // Scroll highlighted item into view
+  const hl = suggestionsBox.querySelector(".highlighted");
+  if (hl) hl.scrollIntoView({ block: "nearest" });
+}
+
+function closeSuggestions() {
+  if (suggestionsBox) {
+    suggestionsBox.style.display = "none";
+    suggestionsBox.innerHTML = "";
+  }
+  searchResults = [];
+  searchHighlight = -1;
+}
+
+let searchDebounceTimer = null;
+symbolSearch.addEventListener("input", () => {
+  const q = symbolSearch.value.trim();
+  if (!q) {
+    closeSuggestions();
+    return;
+  }
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => fetchAndSearch(q, false), 200);
+});
+
+symbolSearch.addEventListener("keydown", (e) => {
+  if (!searchResults.length) return;
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    searchHighlight = Math.min(searchHighlight + 1, searchResults.length - 1);
+    renderSuggestions();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    searchHighlight = Math.max(searchHighlight - 1, 0);
+    renderSuggestions();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    if (searchHighlight >= 0 && searchHighlight < searchResults.length) {
+      const item = searchResults[searchHighlight];
+      loadKline(item.symbol);
+      symbolSearch.value = item.symbol;
+      closeSuggestions();
+    } else {
+      const q = symbolSearch.value.trim();
+      if (q) searchOrLoadKline(q);
+    }
+  } else if (e.key === "Escape") {
+    closeSuggestions();
+  }
+});
+
+suggestionsBox.addEventListener("click", (e) => {
+  const item = e.target.closest(".suggestion-item");
+  if (!item) return;
+  const symbol = item.dataset.symbol;
+  loadKline(symbol);
+  symbolSearch.value = symbol;
+  closeSuggestions();
+});
+
+// Close suggestions when clicking outside
+document.addEventListener("click", (e) => {
+  if (!symbolSearch.contains(e.target) && !suggestionsBox.contains(e.target)) {
+    closeSuggestions();
+  }
 });
 
 document.querySelectorAll(".tab").forEach((button) => {
